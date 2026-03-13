@@ -302,5 +302,26 @@ def get_stock_rank_hot(count: int = 20) -> list[dict]:
         return [{"error": str(e)}]
 
 
+_TOOLS = {
+    "get_stock_news": get_stock_news,
+    "get_policy_news": get_policy_news,
+    "get_market_sentiment": get_market_sentiment,
+    "check_sentiment_change": check_sentiment_change,
+    "get_financial_news": get_financial_news,
+    "get_stock_rank_hot": get_stock_rank_hot,
+}
+
 if __name__ == "__main__":
-    mcp.run()
+    import sys, json as _json
+    if len(sys.argv) >= 3 and sys.argv[1] == "call":
+        tool_name = sys.argv[2]
+        args = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+        if tool_name == "list":
+            print(_json.dumps(list(_TOOLS.keys()), ensure_ascii=False))
+        elif tool_name in _TOOLS:
+            result = _TOOLS[tool_name](**args)
+            print(_json.dumps(result, ensure_ascii=False, default=str))
+        else:
+            print(_json.dumps({"error": f"Unknown tool: {tool_name}"}))
+    else:
+        mcp.run()

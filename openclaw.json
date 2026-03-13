@@ -2,7 +2,6 @@
   // ═══════════════════════════════════════════════════
   // A 股投资分析系统 - OpenClaw 配置
   // ═══════════════════════════════════════════════════
-
   // ─── Agent 配置 ───
   "agents": {
     "defaults": {
@@ -25,11 +24,17 @@
         "name": "盘古 · 协调者",
         "default": true,
         "workspace": "~/.openclaw/workspace-coordinator",
-        "agentDir": "~/.openclaw/agents/coordinator/agent",
-        "model": "kimi-k2.5",
-        "identity": { "name": "盘古" },
+        "agentDir": "~/.openclaw/workspace-coordinator",
+        "model": "bailian/kimi-k2.5",
+        "identity": {
+          "name": "盘古"
+        },
         "groupChat": {
-          "mentionPatterns": ["@盘古", "@pangu", "@PanGu"]
+          "mentionPatterns": [
+            "@盘古",
+            "@pangu",
+            "@PanGu"
+          ]
         },
         "heartbeat": {
           "every": "15m",
@@ -40,19 +45,33 @@
             "end": "15:15",
             "timezone": "Asia/Shanghai"
           }
+        },
+        "subagents": {
+          "allowAgents": [
+            "researcher",
+            "strategist",
+            "portfolio-mgr"
+          ]
         }
       },
       {
         "id": "researcher",
         "name": "朝闻 · 研究员",
         "workspace": "~/.openclaw/workspace-researcher",
-        "agentDir": "~/.openclaw/agents/researcher/agent",
-        "model": "qwen3-max-2026-01-23",
-        "identity": { "name": "朝闻" },
+        "agentDir": "~/.openclaw/workspace-researcher",
+        "model": "bailian/qwen3-max-2026-01-23",
+        "identity": {
+          "name": "朝闻"
+        },
         "tools": {
           "allow": [
-            "exec", "read", "write", "edit",
-            "sessions_list", "sessions_history", "sessions_send"
+            "exec",
+            "read",
+            "write",
+            "edit",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
           ]
         }
       },
@@ -60,53 +79,79 @@
         "id": "strategist",
         "name": "鬼谷 · 策略师",
         "workspace": "~/.openclaw/workspace-strategist",
-        "agentDir": "~/.openclaw/agents/strategist/agent",
-        "model": "kimi-k2.5",
-        "identity": { "name": "鬼谷" },
+        "agentDir": "~/.openclaw/workspace-strategist",
+        "model": "bailian/kimi-k2.5",
+        "identity": {
+          "name": "鬼谷"
+        },
         "tools": {
           "allow": [
-            "read", "write",
-            "sessions_list", "sessions_history", "sessions_send"
+            "read",
+            "write",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
           ],
-          "deny": ["exec", "browser", "canvas", "nodes"]
+          "deny": [
+            "exec",
+            "browser",
+            "canvas",
+            "nodes"
+          ]
         }
       },
       {
         "id": "portfolio-mgr",
         "name": "算盘 · 持仓管家",
         "workspace": "~/.openclaw/workspace-portfolio-mgr",
-        "agentDir": "~/.openclaw/agents/portfolio-mgr/agent",
-        "model": "qwen3.5-plus",
-        "identity": { "name": "算盘" },
+        "agentDir": "~/.openclaw/workspace-portfolio-mgr",
+        "model": "bailian/qwen3.5-plus",
+        "identity": {
+          "name": "算盘"
+        },
         "tools": {
           "allow": [
-            "exec", "read", "write",
-            "sessions_list", "sessions_history", "sessions_send"
+            "exec",
+            "read",
+            "write",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
           ],
-          "deny": ["browser", "canvas", "nodes"]
+          "deny": [
+            "browser",
+            "canvas",
+            "nodes"
+          ]
         }
       }
     ]
   },
-
   // ─── Agent 间通信 ───
   "tools": {
     "agentToAgent": {
       "enabled": true,
-      "allow": ["coordinator", "researcher", "strategist", "portfolio-mgr"]
+      "allow": [
+        "coordinator",
+        "researcher",
+        "strategist",
+        "portfolio-mgr"
+      ]
     },
     "sessions": {
-      "visibility": "agent"
+      "visibility": "all"
     }
   },
-
   // ─── Bindings: 飞书群消息路由到协调者 ───
   "bindings": [
     {
       "agentId": "coordinator",
       "match": {
         "channel": "feishu",
-        "peer": { "kind": "group", "id": "oc_XXXXXXXX" }
+        "peer": {
+          "kind": "group",
+          "id": "oc_XXXXXXXX"
+        }
       }
     },
     {
@@ -117,7 +162,6 @@
       }
     }
   ],
-
   // ─── 飞书渠道配置 ───
   "channels": {
     "feishu": {
@@ -126,7 +170,9 @@
       "streaming": true,
       "blockStreaming": true,
       "groupPolicy": "allowlist",
-      "groupAllowFrom": ["oc_XXXXXXXX"],
+      "groupAllowFrom": [
+        "oc_XXXXXXXX"
+      ],
       "groups": {
         "oc_XXXXXXXX": {
           "requireMention": true,
@@ -142,37 +188,27 @@
       }
     }
   },
-
+  // ─── Skills: 共享数据工具（所有 Agent 可用） ───
+  "skills": {
+    "load": {
+      "extraDirs": [
+        "./skills"
+      ]
+    }
+  },
   // ─── 定时任务 ───
   "cron": {
     "enabled": true,
     "maxConcurrentRuns": 2,
     "sessionRetention": "48h"
   },
-
-  // ─── MCP Server ───
-  "mcpServers": {
-    "stock-data-mcp": {
-      "command": "python",
-      "args": ["mcp-servers/stock-data-mcp/server.py"],
-      "transport": "stdio"
-    },
-    "news-sentiment-mcp": {
-      "command": "python",
-      "args": ["mcp-servers/news-sentiment-mcp/server.py"],
-      "transport": "stdio"
-    },
-    "portfolio-db-mcp": {
-      "command": "python",
-      "args": ["mcp-servers/portfolio-db-mcp/server.py"],
-      "transport": "stdio"
-    }
-  },
-
   // ─── 消息配置 ───
   "messages": {
     "groupChat": {
-      "mentionPatterns": ["@盘古", "@pangu"]
+      "mentionPatterns": [
+        "@盘古",
+        "@pangu"
+      ]
     }
   }
 }

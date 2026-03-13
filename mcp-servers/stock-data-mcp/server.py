@@ -615,5 +615,30 @@ def get_north_flow() -> dict:
         return {"error": str(e)}
 
 
+_TOOLS = {
+    "search_stock": search_stock,
+    "get_realtime_quote": get_realtime_quote,
+    "get_kline": get_kline,
+    "get_financial_report": get_financial_report,
+    "get_individual_info": get_individual_info,
+    "get_sector_flow": get_sector_flow,
+    "get_top_list": get_top_list,
+    "get_index_quote": get_index_quote,
+    "get_stock_comments": get_stock_comments,
+    "get_north_flow": get_north_flow,
+}
+
 if __name__ == "__main__":
-    mcp.run()
+    import sys, json as _json
+    if len(sys.argv) >= 3 and sys.argv[1] == "call":
+        tool_name = sys.argv[2]
+        args = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+        if tool_name == "list":
+            print(_json.dumps(list(_TOOLS.keys()), ensure_ascii=False))
+        elif tool_name in _TOOLS:
+            result = _TOOLS[tool_name](**args)
+            print(_json.dumps(result, ensure_ascii=False, default=str))
+        else:
+            print(_json.dumps({"error": f"Unknown tool: {tool_name}"}))
+    else:
+        mcp.run()

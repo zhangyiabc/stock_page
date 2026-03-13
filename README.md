@@ -46,11 +46,13 @@
 │   └────────┬─────────┘ └────────────────┘ └────────┬─────────┘          │
 │            │                                        │                    │
 │   ┌────────▼────────────────────────────────────────▼─────────┐          │
-│   │                    MCP Tools Layer (stdio)                │          │
+│   │          Data Tools Layer (exec + Python CLI)             │          │
+│   │          Skills 教会 Agent 调用方式                        │          │
 │   │                                                           │          │
 │   │  ┌─────────────────┐ ┌──────────────────┐ ┌───────────┐ │          │
 │   │  │ stock-data-mcp  │ │ news-sentiment   │ │ portfolio │ │          │
-│   │  │                 │ │     -mcp         │ │  -db-mcp  │ │          │
+│   │  │   (10 tools)    │ │   -mcp (6 tools) │ │ -db-mcp   │ │          │
+│   │  │                 │ │                  │ │ (14 tools)│ │          │
 │   │  │ · 实时行情      │ │ · 个股/政策新闻  │ │ · SQLite  │ │          │
 │   │  │ · K线/财报      │ │ · 市场情绪       │ │ · 投资者  │ │          │
 │   │  │ · 板块资金流    │ │ · 舆情变化检测   │ │ · 自选股  │ │          │
@@ -305,7 +307,14 @@ stock_page/
 ├── openclaw.json              # OpenClaw 主配置
 ├── setup-cron.sh              # Cron 任务初始化脚本
 ├── README.md
-├── mcp-servers/               # MCP Server
+├── skills/                    # 共享 Skills（数据工具调用指南）
+│   ├── stock-data-tools/      # 行情数据工具 Skill
+│   │   └── SKILL.md
+│   ├── news-sentiment-tools/  # 舆情新闻工具 Skill
+│   │   └── SKILL.md
+│   └── portfolio-db-tools/    # 持仓数据库工具 Skill
+│       └── SKILL.md
+├── mcp-servers/               # 数据工具（Python CLI）
 │   ├── stock-data-mcp/        # 行情数据（AKShare + 腾讯财经）
 │   │   ├── server.py
 │   │   ├── stock_codes.csv    # 本地 A 股代码表（5400+）
@@ -345,9 +354,15 @@ stock_page/
         └── USER.md
 ```
 
-## MCP Server（3 个）
+## 数据工具（3 个 Python CLI）
 
-| Server | 工具数 | 数据源 | 说明 |
+Agent 通过 `exec` 工具调用 Python 脚本，Skill 文件教会 Agent 调用格式：
+
+```bash
+python mcp-servers/<server>/server.py call <tool_name> '<json_args>'
+```
+
+| 工具包 | 工具数 | 数据源 | 说明 |
 |--------|-------|--------|------|
 | `stock-data-mcp` | 10 | AKShare / 腾讯财经 / 本地 CSV | 实时行情、K线、财报、板块资金流向、龙虎榜、北向资金 |
 | `news-sentiment-mcp` | 6 | AKShare / 东方财富 / 财新 | 个股新闻、政策新闻、市场情绪、舆情变化检测 |
@@ -401,12 +416,13 @@ chmod +x setup-cron.sh
 ./setup-cron.sh
 ```
 
-### 6. 启动 MCP Server + Gateway
+### 6. 启动 Gateway
 
 ```bash
-# 启动 Gateway（MCP Server 由 OpenClaw 通过 stdio 自动启动）
 openclaw gateway --port 18789
 ```
+
+数据工具通过 `exec` 按需调用，无需单独启动。
 
 ## 待开发
 

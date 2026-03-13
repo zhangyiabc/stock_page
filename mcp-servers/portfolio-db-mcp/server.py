@@ -459,5 +459,34 @@ def list_investors() -> list[dict]:
         conn.close()
 
 
+_TOOLS = {
+    "create_investor": create_investor,
+    "get_investor": get_investor,
+    "add_watchlist": add_watchlist,
+    "remove_watchlist": remove_watchlist,
+    "get_watchlist": get_watchlist,
+    "execute_trade": execute_trade,
+    "get_positions": get_positions,
+    "get_all_positions": get_all_positions,
+    "get_trades": get_trades,
+    "get_all_today_trades": get_all_today_trades,
+    "save_daily_snapshot": save_daily_snapshot,
+    "get_pnl_ranking": get_pnl_ranking,
+    "get_available_funds": get_available_funds,
+    "list_investors": list_investors,
+}
+
 if __name__ == "__main__":
-    mcp.run()
+    import sys, json as _json
+    if len(sys.argv) >= 3 and sys.argv[1] == "call":
+        tool_name = sys.argv[2]
+        args = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+        if tool_name == "list":
+            print(_json.dumps(list(_TOOLS.keys()), ensure_ascii=False))
+        elif tool_name in _TOOLS:
+            result = _TOOLS[tool_name](**args)
+            print(_json.dumps(result, ensure_ascii=False, default=str))
+        else:
+            print(_json.dumps({"error": f"Unknown tool: {tool_name}"}))
+    else:
+        mcp.run()
