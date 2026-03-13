@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# MCP logs & data
+mcp-servers/logs/
+mcp-servers/portfolio-db-mcp/portfolio.db

@@ -14,6 +14,10 @@ metadata: {"openclaw":{"requires":{"bins":["python"]}}}
 python {baseDir}/../../mcp-servers/news-sentiment-mcp/server.py call <tool_name> '<json_args>'
 ```
 
+返回值为 JSON，直接解析使用。所有调用自动记录日志：
+- `mcp-servers/logs/calls.log` — 摘要日志（单行，含时间、工具名、耗时、状态）
+- `mcp-servers/logs/calls_detail.jsonl` — 详细日志（完整 JSON，不截断，含完整新闻内容等）
+
 ## 可用工具
 
 ### get_stock_news — 获取个股新闻

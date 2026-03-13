@@ -20,7 +20,10 @@ def _get_spot_df() -> pd.DataFrame:
     now = time.time()
     if _spot_cache["data"] is not None and now - _spot_cache["ts"] < SPOT_CACHE_TTL:
         return _spot_cache["data"]
-    df = ak.stock_zh_a_spot_em()
+    try:
+        df = ak.stock_zh_a_spot_em()
+    except Exception:
+        df = ak.stock_zh_a_spot()
     _spot_cache["data"] = df
     _spot_cache["ts"] = now
     return df
@@ -312,16 +315,9 @@ _TOOLS = {
 }
 
 if __name__ == "__main__":
-    import sys, json as _json
-    if len(sys.argv) >= 3 and sys.argv[1] == "call":
-        tool_name = sys.argv[2]
-        args = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
-        if tool_name == "list":
-            print(_json.dumps(list(_TOOLS.keys()), ensure_ascii=False))
-        elif tool_name in _TOOLS:
-            result = _TOOLS[tool_name](**args)
-            print(_json.dumps(result, ensure_ascii=False, default=str))
-        else:
-            print(_json.dumps({"error": f"Unknown tool: {tool_name}"}))
-    else:
+    import sys as _sys
+    from pathlib import Path
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from call_logger import cli_main
+    if not cli_main("news-sentiment-mcp", _TOOLS):
         mcp.run()

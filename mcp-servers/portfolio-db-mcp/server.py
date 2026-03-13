@@ -477,16 +477,9 @@ _TOOLS = {
 }
 
 if __name__ == "__main__":
-    import sys, json as _json
-    if len(sys.argv) >= 3 and sys.argv[1] == "call":
-        tool_name = sys.argv[2]
-        args = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
-        if tool_name == "list":
-            print(_json.dumps(list(_TOOLS.keys()), ensure_ascii=False))
-        elif tool_name in _TOOLS:
-            result = _TOOLS[tool_name](**args)
-            print(_json.dumps(result, ensure_ascii=False, default=str))
-        else:
-            print(_json.dumps({"error": f"Unknown tool: {tool_name}"}))
-    else:
+    import sys as _sys
+    from pathlib import Path
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from call_logger import cli_main
+    if not cli_main("portfolio-db-mcp", _TOOLS):
         mcp.run()

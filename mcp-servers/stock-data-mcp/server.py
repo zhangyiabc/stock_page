@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 import time
+import json as _json
 import urllib.request
 import re
 
@@ -148,6 +149,98 @@ def _tencent_batch_quote(codes: list[str]) -> dict[str, dict]:
         return {}
 
 
+def _em_secid(code: str) -> str:
+    """将纯数字股票代码转为东方财富 push2 的 secid 格式（market.code）。"""
+    if code.startswith("6") or code.startswith("9"):
+        return f"1.{code}"
+    elif code.startswith("4") or code.startswith("8"):
+        return f"0.{code}"
+    return f"0.{code}"
+
+
+_EM_PUSH_FIELDS = "f12,f13,f14,f2,f4,f18,f3,f5,f6,f8,f7,f10,f9,f100,f22,f30,f31,f32"
+
+
+def _em_push_quote(codes: list[str]) -> dict[str, dict]:
+    """通过东方财富 push2 接口批量获取实时行情，毫秒级响应。返回 {code: quote_dict}。"""
+    if not codes:
+        return {}
+    secids = ",".join(_em_secid(c) for c in codes)
+    url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&fields={_EM_PUSH_FIELDS}&secids={secids}"
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        if data.get("rc") != 0 or not data.get("data"):
+            return {}
+        result = {}
+        for item in data["data"].get("diff", []):
+            code = str(item.get("f12", ""))
+            if not code:
+                continue
+            def fv(val):
+                try:
+                    if val == "-" or val is None:
+                        return None
+                    return round(float(val), 4)
+                except (ValueError, TypeError):
+                    return None
+            market = item.get("f13", 0)
+            result[code] = {
+                "ticker": code + (".SH" if market == 1 else ".SZ"),
+                "code": code,
+                "name": str(item.get("f14", "")).replace(" ", ""),
+                "price": fv(item.get("f2")),
+                "prev_close": fv(item.get("f18")),
+                "change": fv(item.get("f4")),
+                "change_pct": fv(item.get("f3")),
+                "volume": int(item["f5"]) * 100 if item.get("f5") and item["f5"] != "-" else None,
+                "amount": fv(item.get("f6")),
+                "amplitude": fv(item.get("f7")),
+                "turnover_rate": fv(item.get("f8")),
+                "pe_ttm": fv(item.get("f9")),
+                "volume_ratio": fv(item.get("f10")),
+                "industry": str(item.get("f100", "")),
+                "source": "eastmoney_push",
+            }
+        return result
+    except Exception:
+        return {}
+
+
+_EM_SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
+
+
+def _em_search(keyword: str, count: int = 10) -> list[dict]:
+    """通过东方财富搜索接口按关键词搜索 A 股。"""
+    url = (
+        f"https://searchapi.eastmoney.com/api/suggest/get"
+        f"?input={urllib.request.quote(keyword)}&type=14"
+        f"&token={_EM_SEARCH_TOKEN}&count={count}"
+    )
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        items = data.get("QuotationCodeTable", {}).get("Data") or []
+        results = []
+        for it in items:
+            sec_type = it.get("SecurityTypeName", "")
+            if "A" not in sec_type and "科创" not in sec_type and "创业" not in sec_type:
+                continue
+            results.append({
+                "code": it["Code"],
+                "name": it["Name"],
+                "secid": it.get("QuoteID", ""),
+                "market": it.get("MktNum", ""),
+            })
+        return results
+    except Exception:
+        return []
+
+
 def _safe_float(val) -> Optional[float]:
     try:
         if pd.isna(val):
@@ -195,43 +288,47 @@ def _market_suffix(code: str) -> str:
 
 @mcp.tool
 def search_stock(keyword: str) -> list[dict]:
-    """通过名称或代码关键词搜索A股股票，返回匹配的股票列表。"""
+    """通过名称或代码关键词搜索A股股票，返回匹配的股票列表。
+    数据源优先级：东方财富搜索+push2 → 本地代码表+push2 → 本地代码表+腾讯行情"""
     try:
-        try:
-            df = _get_spot_df()
-            mask = df["名称"].str.contains(keyword, na=False) | df["代码"].str.contains(keyword, na=False)
-            results = df[mask].head(10)
-            return [
-                {
-                    "ticker": row["代码"] + _market_suffix(row["代码"]),
-                    "code": row["代码"],
-                    "name": row["名称"],
-                    "price": _safe_float(row.get("最新价")),
-                    "change_pct": _safe_float(row.get("涨跌幅")),
-                }
-                for _, row in results.iterrows()
-            ]
-        except Exception:
-            pass
+        # 优先级1: 东方财富搜索接口 + push2 行情（毫秒级）
+        em_results = _em_search(keyword)
+        if em_results:
+            codes = [r["code"] for r in em_results]
+            quotes = _em_push_quote(codes)
+            out = []
+            for r in em_results:
+                code = r["code"]
+                q = quotes.get(code, {})
+                out.append({
+                    "ticker": code + _market_suffix(code),
+                    "code": code,
+                    "name": q.get("name") or r["name"],
+                    "price": q.get("price"),
+                    "change_pct": q.get("change_pct"),
+                })
+            return out
 
+        # 优先级2: 本地代码表 + push2 行情
         df = _get_local_codes()
         if df.empty:
             return [{"error": "本地股票代码表为空，且在线接口不可用"}]
         mask = df["name"].str.contains(keyword, na=False) | df["code"].str.contains(keyword, na=False)
         results = df[mask].head(10)
         codes = [row["code"] for _, row in results.iterrows()]
-        tq = _tencent_batch_quote(codes) if codes else {}
+        quotes = _em_push_quote(codes) if codes else {}
+        if not quotes:
+            quotes = _tencent_batch_quote(codes) if codes else {}
         out = []
         for _, row in results.iterrows():
-            item = {
+            q = quotes.get(row["code"], {})
+            out.append({
                 "ticker": row["code"] + _market_suffix(row["code"]),
                 "code": row["code"],
-                "name": row["name"],
-            }
-            if row["code"] in tq:
-                item["price"] = tq[row["code"]].get("price")
-                item["change_pct"] = tq[row["code"]].get("change_pct")
-            out.append(item)
+                "name": q.get("name") or row["name"],
+                "price": q.get("price"),
+                "change_pct": q.get("change_pct"),
+            })
         return out
     except Exception as e:
         return [{"error": str(e)}]
@@ -240,87 +337,53 @@ def search_stock(keyword: str) -> list[dict]:
 @mcp.tool
 def get_realtime_quote(ticker: str) -> dict:
     """获取A股个股实时行情，包括价格、涨跌幅、成交量、资金流向等。
-    数据源优先级：东方财富 → 腾讯财经 → AKShare历史日线。"""
+    数据源优先级：东方财富push2 → 腾讯财经 → AKShare全量行情表。"""
     code = _normalize_ticker(ticker)
+    ts = datetime.now().isoformat()
     try:
-        # 优先级1: 东方财富实时行情
-        try:
-            df = _get_spot_df()
-            row = df[df["代码"] == code]
-            if not row.empty:
-                r = row.iloc[0]
-                return {
-                    "ticker": code + _market_suffix(code),
-                    "code": code,
-                    "name": _safe_str(r.get("名称")),
-                    "price": _safe_float(r.get("最新价")),
-                    "change": _safe_float(r.get("涨跌额")),
-                    "change_pct": _safe_float(r.get("涨跌幅")),
-                    "open": _safe_float(r.get("今开")),
-                    "high": _safe_float(r.get("最高")),
-                    "low": _safe_float(r.get("最低")),
-                    "prev_close": _safe_float(r.get("昨收")),
-                    "volume": _safe_float(r.get("成交量")),
-                    "amount": _safe_float(r.get("成交额")),
-                    "turnover_rate": _safe_float(r.get("换手率")),
-                    "pe_ttm": _safe_float(r.get("市盈率-动态")),
-                    "pb": _safe_float(r.get("市净率")),
-                    "total_market_cap": _safe_float(r.get("总市值")),
-                    "circulating_market_cap": _safe_float(r.get("流通市值")),
-                    "amplitude": _safe_float(r.get("振幅")),
-                    "volume_ratio": _safe_float(r.get("量比")),
-                    "source": "eastmoney",
-                    "timestamp": datetime.now().isoformat(),
-                }
-        except Exception:
-            pass
+        # 优先级1: 东方财富 push2 接口（毫秒级，单股精准查询）
+        quotes = _em_push_quote([code])
+        if code in quotes:
+            q = quotes[code]
+            q["timestamp"] = ts
+            return q
 
-        # 优先级2: 腾讯财经接口（轻量、快速、高可用）
+        # 优先级2: 腾讯财经接口
         tq = _tencent_quote(code)
         if tq and tq.get("price"):
-            tq["timestamp"] = datetime.now().isoformat()
+            tq["timestamp"] = ts
             return tq
 
-        # 优先级3: AKShare 历史日线 + 个股信息
-        today = datetime.now().strftime("%Y%m%d")
-        hist_df = _retry(lambda: ak.stock_zh_a_hist(
-            symbol=code, period="daily", start_date=today, end_date=today, adjust="",
-        ))
-        info_df = _retry(lambda: ak.stock_individual_info_em(symbol=code))
-        info = {}
-        if info_df is not None:
-            for _, r in info_df.iterrows():
-                info[_safe_str(r.iloc[0])] = r.iloc[1]
+        # 优先级3: AKShare 全量行情表（较慢，兜底）
+        df = _get_spot_df()
+        row = df[df["代码"] == code]
+        if not row.empty:
+            r = row.iloc[0]
+            return {
+                "ticker": code + _market_suffix(code),
+                "code": code,
+                "name": _safe_str(r.get("名称")),
+                "price": _safe_float(r.get("最新价")),
+                "change": _safe_float(r.get("涨跌额")),
+                "change_pct": _safe_float(r.get("涨跌幅")),
+                "open": _safe_float(r.get("今开")),
+                "high": _safe_float(r.get("最高")),
+                "low": _safe_float(r.get("最低")),
+                "prev_close": _safe_float(r.get("昨收")),
+                "volume": _safe_float(r.get("成交量")),
+                "amount": _safe_float(r.get("成交额")),
+                "turnover_rate": _safe_float(r.get("换手率")),
+                "pe_ttm": _safe_float(r.get("市盈率-动态")),
+                "pb": _safe_float(r.get("市净率")),
+                "total_market_cap": _safe_float(r.get("总市值")),
+                "circulating_market_cap": _safe_float(r.get("流通市值")),
+                "amplitude": _safe_float(r.get("振幅")),
+                "volume_ratio": _safe_float(r.get("量比")),
+                "source": "eastmoney_spot",
+                "timestamp": ts,
+            }
 
-        result = {
-            "ticker": code + _market_suffix(code),
-            "code": code,
-            "name": _safe_str(info.get("股票简称", "")) or _local_name(code),
-            "total_market_cap": _safe_float(info.get("总市值")),
-            "circulating_market_cap": _safe_float(info.get("流通市值")),
-            "industry": _safe_str(info.get("行业", "")),
-            "source": "akshare_hist",
-            "timestamp": datetime.now().isoformat(),
-        }
-
-        if hist_df is not None and not hist_df.empty:
-            h = hist_df.iloc[-1]
-            result.update({
-                "price": _safe_float(h.get("收盘")),
-                "open": _safe_float(h.get("开盘")),
-                "high": _safe_float(h.get("最高")),
-                "low": _safe_float(h.get("最低")),
-                "volume": _safe_float(h.get("成交量")),
-                "amount": _safe_float(h.get("成交额")),
-                "change_pct": _safe_float(h.get("涨跌幅")),
-                "change": _safe_float(h.get("涨跌额")),
-                "amplitude": _safe_float(h.get("振幅")),
-                "turnover_rate": _safe_float(h.get("换手率")),
-            })
-        else:
-            result["price"] = _safe_float(info.get("最新"))
-
-        return result
+        return {"error": f"未找到股票 {code}", "code": code}
     except Exception as e:
         return {"error": str(e)}
 
@@ -504,13 +567,64 @@ INDEX_NAME_MAP = {
 }
 
 
+def _em_index_secid(index_code: str) -> str:
+    """指数的 secid：上证系 1.xxx，深证系 0.xxx。"""
+    if index_code.startswith("0"):
+        return f"1.{index_code}"
+    return f"0.{index_code}"
+
+
+def _em_push_index_quote(index_code: str) -> Optional[dict]:
+    """通过 push2 接口获取指数行情。"""
+    secid = _em_index_secid(index_code)
+    url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&fields=f12,f13,f14,f2,f4,f18,f3,f5,f6,f7,f8,f10&secids={secid}"
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        items = data.get("data", {}).get("diff", [])
+        if not items:
+            return None
+        it = items[0]
+        def fv(val):
+            try:
+                if val == "-" or val is None:
+                    return None
+                return round(float(val), 4)
+            except (ValueError, TypeError):
+                return None
+        return {
+            "code": str(it.get("f12", "")),
+            "name": str(it.get("f14", "")).replace(" ", ""),
+            "price": fv(it.get("f2")),
+            "prev_close": fv(it.get("f18")),
+            "change": fv(it.get("f4")),
+            "change_pct": fv(it.get("f3")),
+            "volume": int(it["f5"]) * 100 if it.get("f5") and it["f5"] != "-" else None,
+            "amount": fv(it.get("f6")),
+            "amplitude": fv(it.get("f7")),
+            "source": "eastmoney_push",
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception:
+        return None
+
+
 @mcp.tool
 def get_index_quote(index_code: str = "000001") -> dict:
     """
     获取大盘指数实时行情。
     常用指数代码: 000001(上证指数) 399001(深证成指) 399006(创业板指) 000300(沪深300)
+    数据源优先级：东方财富push2 → AKShare指数行情 → AKShare历史日线。
     """
     try:
+        # 优先级1: push2 接口（毫秒级）
+        result = _em_push_index_quote(index_code)
+        if result and result.get("price"):
+            return result
+
+        # 优先级2: AKShare 指数行情表
         try:
             df = _retry(ak.stock_zh_index_spot_em)
             row = df[df["代码"] == index_code]
@@ -528,11 +642,13 @@ def get_index_quote(index_code: str = "000001") -> dict:
                     "prev_close": _safe_float(r.get("昨收")),
                     "volume": _safe_float(r.get("成交量")),
                     "amount": _safe_float(r.get("成交额")),
+                    "source": "akshare",
                     "timestamp": datetime.now().isoformat(),
                 }
         except Exception:
             pass
 
+        # 优先级3: AKShare 历史日线
         symbol = INDEX_SYMBOL_MAP.get(index_code)
         if not symbol:
             prefix = "sh" if index_code.startswith("0") else "sz"
@@ -557,6 +673,7 @@ def get_index_quote(index_code: str = "000001") -> dict:
             "volume": _safe_float(r.get("volume")),
             "amount": _safe_float(r.get("amount")),
             "date": _safe_str(r.get("date")),
+            "source": "akshare_hist",
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:
@@ -629,16 +746,8 @@ _TOOLS = {
 }
 
 if __name__ == "__main__":
-    import sys, json as _json
-    if len(sys.argv) >= 3 and sys.argv[1] == "call":
-        tool_name = sys.argv[2]
-        args = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
-        if tool_name == "list":
-            print(_json.dumps(list(_TOOLS.keys()), ensure_ascii=False))
-        elif tool_name in _TOOLS:
-            result = _TOOLS[tool_name](**args)
-            print(_json.dumps(result, ensure_ascii=False, default=str))
-        else:
-            print(_json.dumps({"error": f"Unknown tool: {tool_name}"}))
-    else:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from call_logger import cli_main
+    if not cli_main("stock-data-mcp", _TOOLS):
         mcp.run()
