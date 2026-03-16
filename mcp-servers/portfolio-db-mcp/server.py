@@ -378,28 +378,46 @@ def get_all_today_trades() -> list[dict]:
 def save_daily_snapshot(
     investor_id: str,
     total_value: float,
-    positions_value: float,
-    daily_pnl: float,
-    total_pnl: float,
-    total_pnl_pct: float,
+    daily_pnl: float = 0.0,
+    daily_pnl_pct: float = 0.0,
+    positions_value: float = 0.0,
+    total_pnl: float = 0.0,
+    total_pnl_pct: float = 0.0,
     positions_detail: str = "",
 ) -> dict:
-    """保存投资者的每日持仓快照。"""
+    """保存投资者的每日持仓快照。
+    investor_id: 投资者ID
+    total_value: 总资产
+    daily_pnl: 当日盈亏金额
+    daily_pnl_pct: 当日盈亏比例(%)
+    positions_value: 持仓市值（不传则自动计算: total_value - available_funds）
+    total_pnl: 累计盈亏
+    total_pnl_pct: 累计盈亏比例(%)
+    positions_detail: 持仓明细JSON字符串
+    """
     conn = get_conn()
     try:
         today = date.today().strftime("%Y-%m-%d")
-        investor = conn.execute("SELECT available_funds FROM investors WHERE id=?", (investor_id,)).fetchone()
+        investor = conn.execute("SELECT available_funds, initial_funds FROM investors WHERE id=?", (investor_id,)).fetchone()
         if not investor:
             return {"error": f"投资者 {investor_id} 不存在"}
+
+        avail = investor["available_funds"]
+        if positions_value == 0.0:
+            positions_value = total_value - avail
+        if total_pnl == 0.0 and investor["initial_funds"]:
+            total_pnl = total_value - investor["initial_funds"]
+        if total_pnl_pct == 0.0 and investor["initial_funds"]:
+            total_pnl_pct = round(total_pnl / investor["initial_funds"] * 100, 4)
 
         conn.execute(
             """INSERT OR REPLACE INTO daily_snapshots
                (investor_id, date, total_value, available_funds, positions_value, daily_pnl, total_pnl, total_pnl_pct, positions_detail)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (investor_id, today, total_value, investor["available_funds"], positions_value, daily_pnl, total_pnl, total_pnl_pct, positions_detail),
+            (investor_id, today, total_value, avail, positions_value, daily_pnl, total_pnl, total_pnl_pct, positions_detail),
         )
         conn.commit()
-        return {"status": "ok", "investor_id": investor_id, "date": today}
+        return {"status": "ok", "investor_id": investor_id, "date": today, "daily_pnl": daily_pnl, "daily_pnl_pct": daily_pnl_pct, "total_pnl": total_pnl}
     finally:
         conn.close()
 
