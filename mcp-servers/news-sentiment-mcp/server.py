@@ -8,9 +8,35 @@ import akshare as ak
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional
+from pathlib import Path
 import time
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from circuit_breaker import breaker
 
 mcp = FastMCP(name="news-sentiment-mcp")
+
+
+def _retry(fn, max_retries=2, delay=1.5):
+    """带重试的 AKShare 调用，应对东方财富限频和连接断开。
+    连接错误只重试1次然后快速失败，让调用方走降级逻辑。"""
+    last_err = None
+    for i in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if i < max_retries - 1:
+                err_str = str(e).lower()
+                is_conn_err = any(k in err_str for k in [
+                    "remotedisconnected", "connection aborted",
+                    "connectionreset", "connection reset",
+                ])
+                wait = delay * (2 if is_conn_err else 1)
+                time.sleep(wait)
+    raise last_err
+
 
 _spot_cache = {"data": None, "ts": 0}
 SPOT_CACHE_TTL = 30
@@ -20,10 +46,16 @@ def _get_spot_df() -> pd.DataFrame:
     now = time.time()
     if _spot_cache["data"] is not None and now - _spot_cache["ts"] < SPOT_CACHE_TTL:
         return _spot_cache["data"]
-    try:
-        df = ak.stock_zh_a_spot_em()
-    except Exception:
-        df = ak.stock_zh_a_spot()
+    if breaker.is_available("akshare_spot_em"):
+        try:
+            df = _retry(ak.stock_zh_a_spot_em)
+            breaker.record_success("akshare_spot_em")
+            _spot_cache["data"] = df
+            _spot_cache["ts"] = now
+            return df
+        except Exception as e:
+            breaker.record_failure("akshare_spot_em", str(e))
+    df = _retry(ak.stock_zh_a_spot)
     _spot_cache["data"] = df
     _spot_cache["ts"] = now
     return df
@@ -63,7 +95,10 @@ def get_stock_news(ticker: str, count: int = 20) -> list[dict]:
     """
     code = _normalize_ticker(ticker)
     try:
-        df = ak.stock_news_em(symbol=code)
+        if not breaker.is_available("akshare_stock_news"):
+            return [{"message": f"数据源暂时不可用（熔断中），请稍后重试"}]
+        df = _retry(lambda: ak.stock_news_em(symbol=code))
+        breaker.record_success("akshare_stock_news")
         if df is None or df.empty:
             return [{"message": f"未找到 {ticker} 的新闻"}]
         results = []
@@ -77,6 +112,7 @@ def get_stock_news(ticker: str, count: int = 20) -> list[dict]:
             })
         return results
     except Exception as e:
+        breaker.record_failure("akshare_stock_news", str(e))
         return [{"error": str(e)}]
 
 
@@ -87,10 +123,10 @@ def get_policy_news(category: str = "宏观经济") -> list[dict]:
     category: 新闻分类，可选 宏观经济/产业政策/金融监管 等
     """
     try:
-        df = ak.news_cctv(date=datetime.now().strftime("%Y%m%d"))
+        df = _retry(lambda: ak.news_cctv(date=datetime.now().strftime("%Y%m%d")))
         if df is None or df.empty:
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
-            df = ak.news_cctv(date=yesterday)
+            df = _retry(lambda: ak.news_cctv(date=yesterday))
 
         if df is None or df.empty:
             return [{"message": "暂无政策新闻"}]
@@ -107,12 +143,84 @@ def get_policy_news(category: str = "宏观经济") -> list[dict]:
         return [{"error": str(e)}]
 
 
+def _em_market_sentiment() -> Optional[dict]:
+    """通过东方财富 push2 指数接口获取全市场涨跌统计。
+    查上证+深证两个指数即可合并得到全A股的涨跌家数、涨停跌停数、成交额。
+    单次请求约 0.2 秒。"""
+    import json as _json
+    import urllib.request as _req
+    url = (
+        "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2"
+        "&fields=f12,f14,f3,f6,f104,f105,f106,f107,f108"
+        "&secids=1.000001,0.399001"
+    )
+    try:
+        req = _req.Request(url)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        with _req.urlopen(req, timeout=8) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        if data.get("rc") != 0 or not data.get("data"):
+            return None
+        items = data["data"].get("diff", [])
+        if len(items) < 2:
+            return None
+
+        def iv(it, key):
+            v = it.get(key, 0)
+            return int(v) if isinstance(v, (int, float)) else 0
+
+        up = sum(iv(it, "f104") for it in items)
+        down = sum(iv(it, "f105") for it in items)
+        flat = sum(iv(it, "f106") for it in items)
+        limit_up = sum(iv(it, "f107") for it in items)
+        limit_down = sum(iv(it, "f108") for it in items)
+        total = up + down + flat
+        total_amount = sum(
+            it["f6"] for it in items
+            if isinstance(it.get("f6"), (int, float))
+        )
+
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "total_stocks": total,
+            "up_count": up,
+            "down_count": down,
+            "flat_count": flat,
+            "limit_up_count": limit_up,
+            "limit_down_count": limit_down,
+            "total_amount_billion": round(total_amount / 1e8, 2),
+            "market_temp": (
+                "极热" if limit_up > 80 else
+                "偏热" if limit_up > 40 else
+                "正常" if limit_up > 10 else
+                "偏冷" if limit_down < 20 else
+                "极冷"
+            ),
+            "up_down_ratio": round(up / max(down, 1), 2),
+            "source": "eastmoney_push",
+        }
+    except Exception:
+        return None
+
+
 @mcp.tool
 def get_market_sentiment() -> dict:
     """
     获取A股市场整体情绪指标：涨跌家数、涨停跌停、成交额等。
+    数据源优先级：东方财富push2（秒级）→ AKShare全量行情表（慢速兜底）。
     """
     try:
+        # 优先级1: push2 clist 接口（~0.5秒）
+        if breaker.is_available("em_push_sentiment"):
+            try:
+                result = _em_market_sentiment()
+                if result:
+                    breaker.record_success("em_push_sentiment")
+                    return result
+            except Exception as e:
+                breaker.record_failure("em_push_sentiment", str(e))
+
+        # 优先级2: AKShare 全量行情表（~30-40秒，兜底）
         try:
             df = _get_spot_df()
             total = len(df)
@@ -122,10 +230,8 @@ def get_market_sentiment() -> dict:
             limit_up = len(df[df["涨跌幅"] >= 9.9])
             limit_down = len(df[df["涨跌幅"] <= -9.9])
             total_amount = df["成交额"].sum() if "成交额" in df.columns else 0
-
             avg_change = _safe_float(df["涨跌幅"].mean())
             median_change = _safe_float(df["涨跌幅"].median())
-
             return {
                 "date": datetime.now().strftime("%Y-%m-%d"),
                 "total_stocks": total,
@@ -145,14 +251,15 @@ def get_market_sentiment() -> dict:
                     "极冷"
                 ),
                 "up_down_ratio": round(up_count / max(down_count, 1), 2),
+                "source": "akshare",
             }
         except Exception:
             pass
 
-        df = ak.stock_board_industry_summary_ths()
+        # 优先级3: 同花顺行业板块汇总
+        df = _retry(ak.stock_board_industry_summary_ths)
         total_up = int(df["上涨家数"].sum())
         total_down = int(df["下跌家数"].sum())
-        total_stocks = total_up + total_down
         return {
             "date": datetime.now().strftime("%Y-%m-%d"),
             "source": "同花顺行业板块汇总",
@@ -188,7 +295,7 @@ def check_sentiment_change(tickers: str, hours: int = 4) -> dict:
     for ticker in ticker_list:
         code = _normalize_ticker(ticker)
         try:
-            df = ak.stock_news_em(symbol=code)
+            df = _retry(lambda c=code: ak.stock_news_em(symbol=c))
             if df is None or df.empty:
                 no_change.append(code)
                 continue
@@ -268,7 +375,7 @@ def _assess_impact(change_type: str) -> str:
 def get_financial_news(count: int = 20) -> list[dict]:
     """获取最新财经要闻（来源：财新网）。"""
     try:
-        df = ak.stock_news_main_cx()
+        df = _retry(ak.stock_news_main_cx)
         if df is None or df.empty:
             return [{"message": "暂无财经要闻"}]
         results = []
@@ -287,7 +394,10 @@ def get_financial_news(count: int = 20) -> list[dict]:
 def get_stock_rank_hot(count: int = 20) -> list[dict]:
     """获取东方财富人气榜（股票热度排名）。"""
     try:
-        df = ak.stock_hot_rank_em()
+        if not breaker.is_available("akshare_hot_rank"):
+            return [{"message": "数据源暂时不可用（熔断中），请稍后重试"}]
+        df = _retry(ak.stock_hot_rank_em)
+        breaker.record_success("akshare_hot_rank")
         if df is None or df.empty:
             return [{"message": "暂无人气榜数据"}]
         return [
@@ -302,6 +412,7 @@ def get_stock_rank_hot(count: int = 20) -> list[dict]:
             for i, (_, row) in enumerate(df.head(count).iterrows())
         ]
     except Exception as e:
+        breaker.record_failure("akshare_hot_rank", str(e))
         return [{"error": str(e)}]
 
 
@@ -315,9 +426,6 @@ _TOOLS = {
 }
 
 if __name__ == "__main__":
-    import sys as _sys
-    from pathlib import Path
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from call_logger import cli_main
     if not cli_main("news-sentiment-mcp", _TOOLS):
         mcp.run()

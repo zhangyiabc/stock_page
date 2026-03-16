@@ -13,6 +13,10 @@ import time
 import json as _json
 import urllib.request
 import re
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from circuit_breaker import breaker
 
 mcp = FastMCP(name="stock-data-mcp")
 
@@ -39,8 +43,9 @@ _spot_cache = {"data": None, "ts": 0}
 SPOT_CACHE_TTL = 30
 
 
-def _retry(fn, max_retries=3, delay=2.0):
-    """带重试的 AKShare 调用，应对东方财富限频。"""
+def _retry(fn, max_retries=2, delay=1.5):
+    """带重试的 AKShare 调用，应对东方财富限频和连接断开。
+    连接错误只重试1次然后快速失败，让调用方走降级逻辑。"""
     last_err = None
     for i in range(max_retries):
         try:
@@ -48,16 +53,31 @@ def _retry(fn, max_retries=3, delay=2.0):
         except Exception as e:
             last_err = e
             if i < max_retries - 1:
-                time.sleep(delay * (i + 1))
+                err_str = str(e).lower()
+                is_conn_err = any(k in err_str for k in [
+                    "remotedisconnected", "connection aborted",
+                    "connectionreset", "connection reset",
+                ])
+                wait = delay * (2 if is_conn_err else 1)
+                time.sleep(wait)
     raise last_err
 
 
 def _get_spot_df() -> pd.DataFrame:
-    """缓存实时行情数据，30秒内复用，减少东方财富限频。"""
+    """缓存实时行情数据，30秒内复用，减少东方财富限频。带熔断器保护。"""
     now = time.time()
     if _spot_cache["data"] is not None and now - _spot_cache["ts"] < SPOT_CACHE_TTL:
         return _spot_cache["data"]
-    df = _retry(ak.stock_zh_a_spot_em)
+    if breaker.is_available("akshare_spot_em"):
+        try:
+            df = _retry(ak.stock_zh_a_spot_em)
+            breaker.record_success("akshare_spot_em")
+            _spot_cache["data"] = df
+            _spot_cache["ts"] = now
+            return df
+        except Exception as e:
+            breaker.record_failure("akshare_spot_em", str(e))
+    df = _retry(ak.stock_zh_a_spot)
     _spot_cache["data"] = df
     _spot_cache["ts"] = now
     return df
@@ -292,24 +312,29 @@ def search_stock(keyword: str) -> list[dict]:
     数据源优先级：东方财富搜索+push2 → 本地代码表+push2 → 本地代码表+腾讯行情"""
     try:
         # 优先级1: 东方财富搜索接口 + push2 行情（毫秒级）
-        em_results = _em_search(keyword)
-        if em_results:
-            codes = [r["code"] for r in em_results]
-            quotes = _em_push_quote(codes)
-            out = []
-            for r in em_results:
-                code = r["code"]
-                q = quotes.get(code, {})
-                out.append({
-                    "ticker": code + _market_suffix(code),
-                    "code": code,
-                    "name": q.get("name") or r["name"],
-                    "price": q.get("price"),
-                    "change_pct": q.get("change_pct"),
-                })
-            return out
+        if breaker.is_available("em_search"):
+            try:
+                em_results = _em_search(keyword)
+                if em_results:
+                    breaker.record_success("em_search")
+                    codes = [r["code"] for r in em_results]
+                    quotes = _em_push_quote(codes)
+                    out = []
+                    for r in em_results:
+                        code = r["code"]
+                        q = quotes.get(code, {})
+                        out.append({
+                            "ticker": code + _market_suffix(code),
+                            "code": code,
+                            "name": q.get("name") or r["name"],
+                            "price": q.get("price"),
+                            "change_pct": q.get("change_pct"),
+                        })
+                    return out
+            except Exception as e:
+                breaker.record_failure("em_search", str(e))
 
-        # 优先级2: 本地代码表 + push2 行情
+        # 优先级2: 本地代码表 + push2/腾讯行情
         df = _get_local_codes()
         if df.empty:
             return [{"error": "本地股票代码表为空，且在线接口不可用"}]
@@ -341,18 +366,28 @@ def get_realtime_quote(ticker: str) -> dict:
     code = _normalize_ticker(ticker)
     ts = datetime.now().isoformat()
     try:
-        # 优先级1: 东方财富 push2 接口（毫秒级，单股精准查询）
-        quotes = _em_push_quote([code])
-        if code in quotes:
-            q = quotes[code]
-            q["timestamp"] = ts
-            return q
+        # 优先级1: 东方财富 push2 接口（毫秒级）
+        if breaker.is_available("em_push"):
+            try:
+                quotes = _em_push_quote([code])
+                if code in quotes:
+                    breaker.record_success("em_push")
+                    q = quotes[code]
+                    q["timestamp"] = ts
+                    return q
+            except Exception as e:
+                breaker.record_failure("em_push", str(e))
 
         # 优先级2: 腾讯财经接口
-        tq = _tencent_quote(code)
-        if tq and tq.get("price"):
-            tq["timestamp"] = ts
-            return tq
+        if breaker.is_available("tencent"):
+            try:
+                tq = _tencent_quote(code)
+                if tq and tq.get("price"):
+                    breaker.record_success("tencent")
+                    tq["timestamp"] = ts
+                    return tq
+            except Exception as e:
+                breaker.record_failure("tencent", str(e))
 
         # 优先级3: AKShare 全量行情表（较慢，兜底）
         df = _get_spot_df()
@@ -405,13 +440,13 @@ def get_kline(
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=count * 2)).strftime("%Y%m%d")
     try:
-        df = ak.stock_zh_a_hist(
+        df = _retry(lambda: ak.stock_zh_a_hist(
             symbol=code,
             period=period,
             start_date=start_date,
             end_date=end_date,
             adjust=adjust,
-        )
+        ))
         df = df.tail(count)
         return [
             {
@@ -438,7 +473,15 @@ def get_financial_report(ticker: str) -> dict:
     """获取A股上市公司核心财务指标（近4期）。"""
     code = _normalize_ticker(ticker)
     try:
-        df = _retry(lambda: ak.stock_financial_abstract_ths(symbol=code, indicator="按年度"))
+        df = None
+        if breaker.is_available("akshare_financial_ths"):
+            try:
+                df = _retry(lambda: ak.stock_financial_abstract_ths(symbol=code, indicator="按年度"))
+                if df is not None and not df.empty:
+                    breaker.record_success("akshare_financial_ths")
+            except Exception as e:
+                breaker.record_failure("akshare_financial_ths", str(e))
+                df = None
         if df is None or df.empty:
             df = _retry(lambda: ak.stock_financial_analysis_indicator(symbol=code))
 
@@ -462,13 +505,40 @@ def get_financial_report(ticker: str) -> dict:
 
 @mcp.tool
 def get_individual_info(ticker: str) -> dict:
-    """获取A股个股的基本信息（行业、上市日期、总股本等）。"""
+    """获取A股个股的基本信息（行业、上市日期、总股本等）。
+    数据源优先级：AKShare个股信息 → 东方财富push2 + 本地代码表。"""
     code = _normalize_ticker(ticker)
     try:
-        df = ak.stock_individual_info_em(symbol=code)
-        info = {}
-        for _, row in df.iterrows():
-            info[_safe_str(row.iloc[0])] = _safe_str(row.iloc[1])
+        # 优先级1: AKShare 个股详情（字段最全）
+        if breaker.is_available("akshare_individual_info"):
+            try:
+                df = _retry(lambda: ak.stock_individual_info_em(symbol=code))
+                if df is not None and not df.empty:
+                    breaker.record_success("akshare_individual_info")
+                    info = {}
+                    for _, row in df.iterrows():
+                        info[_safe_str(row.iloc[0])] = _safe_str(row.iloc[1])
+                    return {"ticker": code + _market_suffix(code), "info": info}
+            except Exception as e:
+                breaker.record_failure("akshare_individual_info", str(e))
+
+        # 优先级2: push2 接口 + 本地代码表拼凑基本信息
+        quotes = _em_push_quote([code])
+        q = quotes.get(code, {})
+        name = q.get("name") or _local_name(code) or code
+        info = {
+            "股票代码": code,
+            "股票简称": name,
+            "最新": str(q.get("price", "")),
+            "行业": q.get("industry", ""),
+        }
+        if q.get("pe_ttm"):
+            info["市盈率TTM"] = str(q["pe_ttm"])
+        if q.get("turnover_rate"):
+            info["换手率"] = str(q["turnover_rate"])
+        if q.get("volume"):
+            info["成交量"] = str(q["volume"])
+        info["source"] = "eastmoney_push+local"
         return {"ticker": code + _market_suffix(code), "info": info}
     except Exception as e:
         return {"error": str(e)}
@@ -478,19 +548,21 @@ def get_individual_info(ticker: str) -> dict:
 def get_sector_flow() -> list[dict]:
     """获取A股行业板块涨跌幅排名（当日），含资金净流入和领涨股。"""
     try:
-        try:
-            df = _retry(lambda: ak.stock_sector_fund_flow_rank(indicator="今日"))
-            return [
-                {
-                    "sector": _safe_str(row.get("名称")),
-                    "change_pct": _safe_float(row.get("今日涨跌幅")),
-                    "main_net_inflow": _safe_float(row.get("主力净流入-净额")),
-                    "main_net_inflow_pct": _safe_float(row.get("主力净流入-净占比")),
-                }
-                for _, row in df.head(20).iterrows()
-            ]
-        except Exception:
-            pass
+        if breaker.is_available("akshare_sector_flow"):
+            try:
+                df = _retry(lambda: ak.stock_sector_fund_flow_rank(indicator="今日"))
+                breaker.record_success("akshare_sector_flow")
+                return [
+                    {
+                        "sector": _safe_str(row.get("名称")),
+                        "change_pct": _safe_float(row.get("今日涨跌幅")),
+                        "main_net_inflow": _safe_float(row.get("主力净流入-净额")),
+                        "main_net_inflow_pct": _safe_float(row.get("主力净流入-净占比")),
+                    }
+                    for _, row in df.head(20).iterrows()
+                ]
+            except Exception as e:
+                breaker.record_failure("akshare_sector_flow", str(e))
 
         df = _retry(ak.stock_board_industry_summary_ths)
         return [
@@ -620,33 +692,40 @@ def get_index_quote(index_code: str = "000001") -> dict:
     """
     try:
         # 优先级1: push2 接口（毫秒级）
-        result = _em_push_index_quote(index_code)
-        if result and result.get("price"):
-            return result
+        if breaker.is_available("em_push_index"):
+            try:
+                result = _em_push_index_quote(index_code)
+                if result and result.get("price"):
+                    breaker.record_success("em_push_index")
+                    return result
+            except Exception as e:
+                breaker.record_failure("em_push_index", str(e))
 
         # 优先级2: AKShare 指数行情表
-        try:
-            df = _retry(ak.stock_zh_index_spot_em)
-            row = df[df["代码"] == index_code]
-            if not row.empty:
-                r = row.iloc[0]
-                return {
-                    "code": _safe_str(r.get("代码")),
-                    "name": _safe_str(r.get("名称")),
-                    "price": _safe_float(r.get("最新价")),
-                    "change": _safe_float(r.get("涨跌额")),
-                    "change_pct": _safe_float(r.get("涨跌幅")),
-                    "open": _safe_float(r.get("今开")),
-                    "high": _safe_float(r.get("最高")),
-                    "low": _safe_float(r.get("最低")),
-                    "prev_close": _safe_float(r.get("昨收")),
-                    "volume": _safe_float(r.get("成交量")),
-                    "amount": _safe_float(r.get("成交额")),
-                    "source": "akshare",
-                    "timestamp": datetime.now().isoformat(),
-                }
-        except Exception:
-            pass
+        if breaker.is_available("akshare_index_spot"):
+            try:
+                df = _retry(ak.stock_zh_index_spot_em)
+                row = df[df["代码"] == index_code]
+                if not row.empty:
+                    breaker.record_success("akshare_index_spot")
+                    r = row.iloc[0]
+                    return {
+                        "code": _safe_str(r.get("代码")),
+                        "name": _safe_str(r.get("名称")),
+                        "price": _safe_float(r.get("最新价")),
+                        "change": _safe_float(r.get("涨跌额")),
+                        "change_pct": _safe_float(r.get("涨跌幅")),
+                        "open": _safe_float(r.get("今开")),
+                        "high": _safe_float(r.get("最高")),
+                        "low": _safe_float(r.get("最低")),
+                        "prev_close": _safe_float(r.get("昨收")),
+                        "volume": _safe_float(r.get("成交量")),
+                        "amount": _safe_float(r.get("成交额")),
+                        "source": "akshare",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+            except Exception as e:
+                breaker.record_failure("akshare_index_spot", str(e))
 
         # 优先级3: AKShare 历史日线
         symbol = INDEX_SYMBOL_MAP.get(index_code)
@@ -682,25 +761,45 @@ def get_index_quote(index_code: str = "000001") -> dict:
 
 @mcp.tool
 def get_stock_comments(ticker: str) -> dict:
-    """获取个股的千股千评数据（综合评分、资金流向评级等）。"""
+    """获取个股的千股千评数据（综合评分、资金流向评级等）。
+    数据源优先级：AKShare千股千评 → 东方财富push2基础数据。"""
     code = _normalize_ticker(ticker)
     try:
-        df = _retry(ak.stock_comment_em)
-        row = df[df["代码"] == code]
-        if row.empty:
-            return {"error": f"未找到 {ticker} 的千股千评数据"}
-        r = row.iloc[0]
-        return {
-            "ticker": code + _market_suffix(code),
-            "name": _safe_str(r.get("名称")),
-            "score": _safe_float(r.get("综合得分")),
-            "rank_change": _safe_str(r.get("综合排名变化")),
-            "attention_index": _safe_float(r.get("关注指数")),
-            "technical_side": _safe_str(r.get("技术面")),
-            "capital_side": _safe_str(r.get("资金面")),
-            "message_side": _safe_str(r.get("消息面")),
-            "fundamental_side": _safe_str(r.get("基本面")),
-        }
+        if breaker.is_available("akshare_comment"):
+            try:
+                df = _retry(ak.stock_comment_em)
+                row = df[df["代码"] == code]
+                if not row.empty:
+                    breaker.record_success("akshare_comment")
+                    r = row.iloc[0]
+                    return {
+                        "ticker": code + _market_suffix(code),
+                        "name": _safe_str(r.get("名称")),
+                        "score": _safe_float(r.get("综合得分")),
+                        "rank_change": _safe_str(r.get("综合排名变化")),
+                        "attention_index": _safe_float(r.get("关注指数")),
+                        "technical_side": _safe_str(r.get("技术面")),
+                        "capital_side": _safe_str(r.get("资金面")),
+                        "message_side": _safe_str(r.get("消息面")),
+                        "fundamental_side": _safe_str(r.get("基本面")),
+                    }
+            except Exception as e:
+                breaker.record_failure("akshare_comment", str(e))
+
+        quotes = _em_push_quote([code])
+        q = quotes.get(code, {})
+        if q:
+            return {
+                "ticker": code + _market_suffix(code),
+                "name": q.get("name", ""),
+                "price": q.get("price"),
+                "change_pct": q.get("change_pct"),
+                "pe_ttm": q.get("pe_ttm"),
+                "turnover_rate": q.get("turnover_rate"),
+                "volume_ratio": q.get("volume_ratio"),
+                "source": "eastmoney_push (千股千评不可用)",
+            }
+        return {"error": f"未找到 {ticker} 的千股千评数据"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -746,8 +845,6 @@ _TOOLS = {
 }
 
 if __name__ == "__main__":
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from call_logger import cli_main
     if not cli_main("stock-data-mcp", _TOOLS):
         mcp.run()

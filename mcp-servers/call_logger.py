@@ -73,6 +73,13 @@ def cli_main(server_name: str, tools: dict) -> bool:
         if tool_name == "list":
             print(json.dumps(list(tools.keys()), ensure_ascii=False))
             return True
+        if tool_name == "breaker_status":
+            try:
+                from circuit_breaker import breaker
+                print(json.dumps(breaker.get_all_status(), ensure_ascii=False))
+            except ImportError:
+                print(json.dumps({"error": "circuit_breaker module not available"}))
+            return True
 
         if tool_name not in tools:
             err = {"error": f"Unknown tool: {tool_name}"}
