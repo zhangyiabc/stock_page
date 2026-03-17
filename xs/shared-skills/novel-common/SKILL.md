@@ -1,0 +1,140 @@
+---
+name: novel-common
+description: 小说创作项目的通用工具和约定。所有 Agent 共享的基础规范。
+user-invocable: false
+metadata: {"openclaw": {"emoji": "📚", "always": true}}
+---
+
+# 小说创作通用规范
+
+## 文件路径约定
+
+所有 Agent 在读写文件时遵循以下路径规范：
+
+### 小说正文（存储在 coordinator workspace 下）
+
+- 路径格式：`novel/vol{卷号}/chapter-{三位数章节号}-{章名拼音}.md`
+- 示例：`novel/vol1/chapter-001-hunshi-mowan.md`、`novel/vol3/chapter-087-longhu-fengyun.md`
+- 章节号全局递增，不按卷重置（第二卷第一章是 chapter-031 而不是 chapter-001）
+- 每卷一个子目录，卷号用阿拉伯数字
+
+**目录结构示例：**
+```
+workspace-coordinator/novel/
+├── vol1/
+│   ├── chapter-001-chushan.md            # 第1章 出山
+│   ├── chapter-002-guren-xiangfeng.md    # 第2章 故人相逢
+│   ├── chapter-003-yexu.md               # 第3章 夜雨
+│   └── ...chapter-030-fengbao-qianxi.md  # 第30章 风暴前夕
+├── vol2/
+│   ├── chapter-031-pojing.md             # 第31章 破镜
+│   └── ...
+├── vol10/
+│   └── chapter-280-zhongjie.md
+└── metadata.md                            # 全书元数据（卷章对照、总字数统计）
+```
+
+**命名规则：**
+- 章节号固定三位数字，不足补零：`001`, `002`, ..., `999`
+- 如超过999章，扩展为四位：`chapter-1000-xxx.md`
+- 章名部分使用拼音小写，多字词用连字符分隔：`guren-xiangfeng`
+- 拼音取章名关键词，控制在 2-4 个词以内，不需要标注声调
+- 如果章名较长，可适当缩写：「第一百章 风起云涌天下乱」→ `chapter-100-fengqi-yunyong.md`
+- 文件名全小写，不含中文字符，确保跨平台兼容
+
+### 记忆文件（memory-keeper workspace 下）
+
+**索引文件（入口）：**
+- 角色索引：`memory/characters/character-index.md`
+- 章节摘要索引：`memory/plot/chapter-log.md`
+- 伏笔索引 + 活跃表：`memory/plot/foreshadowing.md`
+- 时间线索引：`memory/world/timeline.md`
+
+**分片文件（按卷存储，避免单文件过大）：**
+- 卷章节摘要：`memory/plot/chapters/vol{N}-chapters.md`
+- 卷伏笔详情：`memory/plot/foreshadowing/vol{N}-planted.md`
+- 伏笔归档：`memory/plot/foreshadowing/archived.md`
+- 卷时间线：`memory/world/timelines/vol{N}-timeline.md`
+
+**角色文件：**
+- 角色档案：`memory/characters/{角色名拼音小写}.md`
+- 角色状态日志归档：`memory/characters/{角色名拼音小写}-history.md`（主文件超50条时）
+- 人物关系：`memory/characters/relationships.md`
+
+**设定文件（通常不分片）：**
+- 世界观：`memory/world/worldbuilding.md`
+- 力量体系：`memory/world/magic-system.md`
+- 地理：`memory/world/geography.md`
+- 势力：`memory/world/factions.md`
+- 历史：`memory/world/history.md`
+
+**其他：**
+- 总大纲：`memory/plot/master-outline.md`
+- 卷大纲：`memory/plot/arc-{卷名}.md`
+- 文风指南：`memory/style/style-guide.md`
+- 词汇表：`memory/style/vocabulary.md`
+- 进度：coordinator workspace 下 `memory/plot/progress.md`
+
+## 章节正文文件格式
+
+文件名示例：`chapter-001-chushan.md`，文件内容格式如下：
+
+```markdown
+# 第1章 出山
+
+（正文内容）
+
+---
+<!-- metadata -->
+<!-- chapter: 001 -->
+<!-- title: 出山 -->
+<!-- volume: 1 -->
+<!-- words: XXXX -->
+<!-- date: YYYY-MM-DD -->
+<!-- outline_version: {大纲版本} -->
+<!-- reviewed: true/false -->
+```
+
+- 文件内的 `# 第X章 {章节标题}` 使用中文章名
+- metadata 中的 `title` 字段也记录中文章名，用于程序化检索
+- 文件名中的拼音与内容中的中文章名必须对应
+
+## 伏笔 ID 规范
+
+- 格式：`#` + 三位递增数字，如 `#001`、`#042`、`#128`
+- 全局唯一，不复用已废弃的 ID
+
+## 角色编号规范
+
+- 格式：`C` + 三位递增数字，如 `C001`、`C015`
+- 在 `character-index.md` 中统一管理
+
+## 章节摘要规范
+
+每章归档时产出的摘要必须包含：
+1. 主要情节事件（按发生顺序）
+2. 角色状态变化
+3. 新伏笔和回收的伏笔
+4. 故事内时间推进
+5. 不超过500字
+
+## Agent 间数据传递约定
+
+通过 `sessions_spawn` 的 `task` 字段传递的上下文数据，使用以下标记分隔：
+
+```
+=== 角色状态 ===
+（内容）
+
+=== 世界设定 ===
+（内容）
+
+=== 近章摘要 ===
+（内容）
+
+=== 伏笔清单 ===
+（内容）
+
+=== 大纲规划 ===
+（内容）
+```

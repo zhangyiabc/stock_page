@@ -1,0 +1,141 @@
+# 小说项目初始化流水线
+# 用法: /prose run init-project.prose
+
+input title: "小说名称"
+input genre: "小说类型（玄幻/科幻/悬疑/历史/都市/其他）"
+input premise: "核心设定或故事前提（一段话描述）"
+input target_length: "目标总字数（如：100万字）"
+
+agent planner:
+  model: qwen/qwen3.5-plus
+  prompt: "你是网文策划大师。精通爽点设计、节奏控制、钩子设计。根据用户的题材和设定，设计能让读者停不下来的世界观和故事架构。"
+
+agent memory-keeper:
+  model: minimax/MiniMax-M2.5
+  prompt: "你是小说数据库管理员。将设定信息结构化后写入对应的 memory 文件。"
+
+# Step 1: 世界观设计
+worldbuilding = session: planner
+  prompt: |
+    为小说《{title}》设计世界观。
+    类型：{genre}
+    核心设定：{premise}
+    目标字数：{target_length}
+    
+    请设计：
+    1. 世界观总纲（社会结构、核心规则、文化背景）
+    2. 力量/能力体系（等级、分类、限制、禁忌）
+    3. 地理设定（主要地点、距离关系）
+    4. 势力/组织设定（主要势力及关系）
+    5. 背景历史（影响当前故事的历史事件）
+
+# Step 2: 角色设计
+characters = session: planner
+  prompt: |
+    为小说《{title}》设计主要角色。
+    
+    主角设计（必须通过四要素检查）：
+    1. 有欲望：他想要什么？（复仇/变强/活下去/登顶/改命...）
+    2. 有特点：鲜明标签是什么？（嘴毒但护短/冷静狠人/表面咸鱼实则极强...）
+    3. 有优势：金手指是什么？必须有持续开发空间
+    4. 有代入感：读者为什么想成为他/她，或想看他/她翻盘
+    
+    配角设计（3-5个核心配角）：
+    - 每个配角必须有明确标签（忠犬兄弟/沙雕队友/冷艳师姐/傲娇大小姐...）
+    - 作用明确（衬托主角/制造矛盾/提供情绪价值/笑点/泪点/CP感）
+    
+    反派设计（主要反派）：
+    - 必须有明确目的、压迫感、手段
+    - 能逼主角成长，不是只会无脑找茬的工具人
+    - 反派太蠢，主角赢了也不爽
+    
+    人物关系图谱
+    每个角色的说话方式要有明确区分。
+  context: { worldbuilding }
+
+# Step 3: 总大纲
+outline = session: planner
+  prompt: |
+    为小说《{title}》设计总大纲。
+    目标字数：{target_length}
+    
+    请设计：
+    1. 核心卖点（一句话说明这本书的核心吸引力）
+    2. 核心情绪（本书提供的主情绪：热血/爽/甜/虐/悬疑）
+    3. 多卷结构，每卷必须包含：
+       - 卷目标（本卷主角要达成什么）
+       - 卷反派（本卷核心对手）
+       - 卷冲突（主要矛盾）
+       - 卷高潮（最精彩的大场面）
+       - 卷收获（主角拿到什么——实力/地位/关系/信息）
+    4. 爽点路线图：全书大爽点的时间分布
+    5. 主要伏笔网络（至少10条贯穿全书的伏笔线）
+    6. 前10章的详细章节规划（开篇设计是生死线）
+    
+    开篇要求（前3章）：
+    - 第1章直接上冲突，不做冗长世界观铺垫
+    - 前3章必须让读者知道：主角是谁、遇到什么麻烦、有什么特别、为什么值得继续看
+    - 采用高效开头模式：危机开局/反差开局/高概念开局/名场面开局
+    - 金手指最迟第3章出现或暗示
+    
+    节奏要求：
+    - 小爽点不断（每1-2章推进感）
+    - 每3-5章一个小高潮
+    - 每15-20章一个大高潮
+    - 不能连续3章无爽点/无推进
+    - 铺垫不能太长——十几章还没进入主线就是危险
+    - 高潮后不能回落太久
+    - 伏笔回收周期不超过30章
+    
+    全书推进核心循环：
+    遇到问题 → 增压 → 找机会 → 翻盘 → 收益 → 更大问题
+  context: { worldbuilding, characters }
+
+# Step 4: 持久化所有设定
+parallel:
+  session: memory-keeper
+    prompt: |
+      将以下世界观设定写入对应文件：
+      - memory/world/worldbuilding.md
+      - memory/world/magic-system.md
+      - memory/world/geography.md
+      - memory/world/factions.md
+      - memory/world/history.md
+      严格按照文件中已有的结构模板填充内容。
+    context: { worldbuilding }
+
+  session: memory-keeper
+    prompt: |
+      将以下角色设定写入对应文件：
+      - 每个角色创建独立文件 memory/characters/{拼音}.md
+      - 更新 memory/characters/character-index.md
+      - 创建 memory/characters/relationships.md
+      严格按照 AGENTS.md 中规定的角色文件规范格式。
+    context: { characters }
+
+  session: memory-keeper
+    prompt: |
+      将以下大纲写入对应文件：
+      - memory/plot/master-outline.md（总大纲）
+      - 为每卷创建 memory/plot/arc-{卷名}.md
+      - 初始化 memory/plot/foreshadowing.md（填入规划的伏笔）
+      严格按照文件中已有的结构模板填充内容。
+    context: { outline }
+
+# Step 5: 设置文风
+session: planner
+  prompt: |
+    根据小说类型和风格需求，制定文风指南。
+    小说类型：{genre}
+    
+    请确定：
+    1. 人称视角
+    2. 叙事时态
+    3. 整体基调
+    4. 语言风格
+    5. 各场景类型的节奏规范
+    6. 禁用词汇列表
+    7. 2-3段风格范例文本
+  context: { worldbuilding, characters }
+
+session "项目《{title}》初始化完成。世界观、角色、大纲、文风指南均已创建。可以开始写第一章了。"

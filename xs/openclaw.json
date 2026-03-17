@@ -1,0 +1,259 @@
+{
+  "agents": {
+    "list": [
+      {
+        "id": "coordinator",
+        "name": "总调度",
+        "default": true,
+        "workspace": "./workspace-coordinator",
+        "agentDir": "~/.openclaw/agents/coordinator/agent",
+        "model": "qwen/qwen3-max-2026-01-23",
+        "tools": {
+          "alsoAllow": ["lobster"]
+        }
+      },
+      {
+        "id": "planner",
+        "name": "策划大师",
+        "workspace": "./workspace-planner",
+        "agentDir": "~/.openclaw/agents/planner/agent",
+        "model": "qwen/qwen3.5-plus"
+      },
+      {
+        "id": "writer",
+        "name": "写手",
+        "workspace": "./workspace-writer",
+        "agentDir": "~/.openclaw/agents/writer/agent",
+        "model": "openrouter/moonshotai/kimi-k2.5"
+      },
+      {
+        "id": "editor",
+        "name": "编辑",
+        "workspace": "./workspace-editor",
+        "agentDir": "~/.openclaw/agents/editor/agent",
+        "model": "zai/glm-5"
+      },
+      {
+        "id": "memory-keeper",
+        "name": "记忆管家",
+        "workspace": "./workspace-memory",
+        "agentDir": "~/.openclaw/agents/memory-keeper/agent",
+        "model": "minimax/MiniMax-M2.5"
+      }
+    ],
+    "defaults": {
+      "compaction": {
+        "model": "zai/glm-4.7",
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": 8000,
+          "systemPrompt": "会话即将压缩。请将当前创作中的关键决定、人物变化、伏笔信息保存到对应 memory 文件。",
+          "prompt": "将本轮对话中重要的创作信息写入 memory/ 目录下对应文件；如果没有需要保存的内容，回复 NO_REPLY。"
+        }
+      },
+      "subagents": {
+        "maxSpawnDepth": 2,
+        "maxChildrenPerAgent": 5,
+        "maxConcurrent": 8,
+        "runTimeoutSeconds": 1800,
+        "archiveAfterMinutes": 120,
+        "model": "minimax/MiniMax-M2.5"
+      },
+      "memorySearch": {
+        "provider": "qwen",
+        "model": "qwen3-coder-plus",
+        "query": {
+          "hybrid": {
+            "enabled": true,
+            "vectorWeight": 0.7,
+            "textWeight": 0.3,
+            "candidateMultiplier": 4,
+            "mmr": {
+              "enabled": true,
+              "lambda": 0.7
+            },
+            "temporalDecay": {
+              "enabled": false
+            }
+          }
+        },
+        "cache": {
+          "enabled": true,
+          "maxEntries": 50000
+        }
+      },
+      "bootstrapMaxChars": 25000,
+      "bootstrapTotalMaxChars": 180000
+    }
+  },
+
+  "bindings": [
+    { "agentId": "coordinator", "match": { "channel": "telegram" } },
+    { "agentId": "coordinator", "match": { "channel": "whatsapp" } },
+    { "agentId": "coordinator", "match": { "channel": "discord" } }
+  ],
+
+  "tools": {
+    "agentToAgent": {
+      "enabled": true,
+      "allow": ["coordinator", "planner", "writer", "editor", "memory-keeper"]
+    },
+    "alsoAllow": ["lobster"]
+  },
+
+  "session": {
+    "dmScope": "per-channel-peer",
+    "reset": {
+      "mode": "idle",
+      "idleMinutes": 480
+    },
+    "maintenance": {
+      "mode": "enforce",
+      "pruneAfter": "90d",
+      "maxEntries": 2000,
+      "rotateBytes": "20mb"
+    }
+  },
+
+  "memory": {
+    "backend": "qmd",
+    "citations": "auto",
+    "qmd": {
+      "includeDefaultMemory": true,
+      "searchMode": "query",
+      "update": {
+        "interval": "3m",
+        "debounceMs": 10000
+      },
+      "limits": {
+        "maxResults": 10,
+        "maxSnippetChars": 2000,
+        "timeoutMs": 5000
+      }
+    }
+  },
+
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "qwen": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "apiKey": "${QWEN_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "name": "Qwen3.5-Plus",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "qwen3-max-2026-01-23",
+            "name": "Qwen3-Max (2026-01-23)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "qwen3-coder-plus",
+            "name": "Qwen3-Coder-Plus",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "qwen3-coder-next",
+            "name": "Qwen3-Coder-Next",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "zai": {
+        "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+        "apiKey": "${ZAI_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "glm-5",
+            "name": "GLM-5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 200000,
+            "maxTokens": 16384
+          },
+          {
+            "id": "glm-4.7",
+            "name": "GLM-4.7",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 200000,
+            "maxTokens": 16384
+          }
+        ]
+      },
+      "minimax": {
+        "baseUrl": "https://api.minimaxi.com/anthropic",
+        "apiKey": "${MINIMAX_API_KEY}",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax M2.5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+
+  "cron": {
+    "jobs": [
+      {
+        "id": "consistency-check",
+        "schedule": "0 3 * * *",
+        "agentId": "editor",
+        "task": "执行每日一致性检查：读取 memory/review/ 下的 chapter-log.md 和 characters/ 目录下所有角色文件，检查最近写完的章节是否存在人物性格矛盾、时间线错误、设定冲突。将发现的问题写入 memory/daily/YYYY-MM-DD.md。",
+        "session": "cron:consistency"
+      },
+      {
+        "id": "foreshadowing-audit",
+        "schedule": "0 4 * * 0",
+        "agentId": "editor",
+        "task": "执行每周伏笔审计：读取 memory/review/foreshadowing-report.md，标记超过20章未回收的伏笔为'高风险'，生成审计报告写入 memory/review/foreshadow-audit-YYYY-MM-DD.md。",
+        "session": "cron:foreshadow"
+      },
+      {
+        "id": "progress-summary",
+        "schedule": "0 22 * * *",
+        "agentId": "coordinator",
+        "task": "生成每日写作进度摘要：统计今日完成章节、总字数变化、待处理任务，更新 memory/plot/progress.md。",
+        "session": "cron:progress"
+      }
+    ]
+  },
+
+  "plugins": {
+    "entries": {
+      "llm-task": { "enabled": true },
+      "open-prose": { "enabled": true }
+    }
+  },
+
+  "skills": {
+    "load": {
+      "extraDirs": ["./shared-skills"],
+      "watch": true,
+      "watchDebounceMs": 500
+    }
+  }
+}

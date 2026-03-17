@@ -1,0 +1,27 @@
+# 批量写作流水线（连续写多章）
+# 用法: /prose run batch-write.prose
+
+input start_chapter: "起始章节号"
+input end_chapter: "结束章节号"
+input target_words_per_chapter: "每章目标字数（默认8000-10000）"
+
+agent coordinator:
+  model: qwen/qwen3-max-2026-01-23
+  prompt: "你是小说创作总调度。按顺序调度每一章的写作，确保章节间的连贯性。每章写完后更新进度。"
+
+session: coordinator
+  prompt: |
+    请从第{start_chapter}章写到第{end_chapter}章。
+    每章目标字数：{target_words_per_chapter}
+    
+    对每一章执行以下流程：
+    1. 调度 memory-keeper 查询本章上下文
+    2. 调度 planner 产出章节大纲
+    3. 调度 writer 写正文
+    4. 调度 editor 审校
+    5. 调度 memory-keeper 归档
+    6. 将正文保存到 novel/ 目录
+    7. 更新 memory/plot/progress.md
+    
+    每章完成后汇报进度，然后继续下一章。
+    如果某章审校发现严重问题，暂停并报告。

@@ -1,0 +1,64 @@
+# 章节修订流水线
+# 用法: /prose run revise-chapter.prose
+
+input chapter_number: "需要修订的章节号"
+input revision_notes: "修订要求（用户的修改意见）"
+
+agent memory-keeper:
+  model: minimax/MiniMax-M2.5
+  prompt: "你是小说数据库管理员。精确查询和返回角色状态、世界设定、伏笔信息。"
+
+agent writer:
+  model: openrouter/moonshotai/kimi-k2.5
+  prompt: "你是小说写手。根据修改意见修订章节正文，保持风格一致。"
+
+agent editor:
+  model: zai/glm-5
+  prompt: "你是资深编辑。审校修订版正文，确保修改到位且没有引入新问题。"
+
+# Step 1: 获取上下文和原文
+context_data = session: memory-keeper
+  prompt: |
+    为第{chapter_number}章修订准备上下文：
+    1. 该章的角色状态和设定约束
+    2. 前后章节摘要（用于检查衔接）
+    3. 该章涉及的伏笔
+
+# Step 2: 修订
+revised = session: writer
+  prompt: |
+    修订第{chapter_number}章。
+    
+    修订要求：
+    {revision_notes}
+    
+    请读取原文 novel/ 目录下对应文件，按修订要求修改。
+    修订时注意：
+    - 只改需要改的部分，保持其余部分不变
+    - 确保修改不引入新的设定冲突
+    - 保持文风一致
+  context: { context_data }
+
+# Step 3: 审校修订版
+review = session: editor
+  prompt: |
+    审校第{chapter_number}章的修订版。
+    
+    重点检查：
+    1. 修订要求是否全部满足
+    2. 修改是否引入了新的问题
+    3. 与前后章节的衔接是否仍然通顺
+  context: { revised, context_data }
+
+# Step 4: 更新记忆（如果修改影响了角色状态或伏笔）
+session: memory-keeper
+  prompt: |
+    第{chapter_number}章已修订。检查修订内容是否影响了：
+    1. 角色状态（如有变化则更新角色文件）
+    2. 伏笔（如有变化则更新伏笔追踪表）
+    3. 章节摘要（如有重大情节变化则更新 chapter-log.md 中的摘要）
+    如果修订仅涉及文笔润色，不需要更新。
+  context: { review }
+
+session "第{chapter_number}章修订完成。"
+  context: { review }
