@@ -3,7 +3,8 @@
 
 input chapter_number: "要写的章节号"
 input chapter_brief: "本章简述（可选，留空则从大纲获取）"
-input target_words: "目标字数（默认8000-10000）"
+input target_words: "目标字数（默认3500左右）"
+input require_approval: "是否需要人工确认后再归档（默认 false，前3章和卷末章建议设为 true）"
 
 agent memory-keeper:
   model: minimax/MiniMax-M2.5
@@ -19,24 +20,44 @@ agent writer:
 
 agent editor:
   model: zai/glm-5
-  prompt: "你是资深网文编辑。审校优先级：AI味检测 > 网文质量（爽点/钩子/节奏/情绪）> 设定一致性 > 文笔润色。输出六维评分表。"
+  prompt: "你是资深网文编辑。审校优先级：AI味检测 > 网文质量（爽点/钩子/节奏/情绪）> 设定一致性 > 文笔润色。输出六维评分表。在报告开头用 VERDICT: PASS 或 VERDICT: FAIL 标注是否合格。"
 
-# Step 1: 收集上下文
-context_data = session: memory-keeper
-  prompt: |
-    为第{chapter_number}章写作准备上下文。请返回：
-    1. 本章涉及的主要角色当前状态（从角色文件读取）
-    2. 相关世界设定要点
-    3. 最近3-5章的摘要（从当前卷分片文件读取）
-    4. 当前活跃的伏笔列表（特别标出紧迫度高的）
-    5. 总大纲中对本章的规划（从 master-outline.md 读取）
-    6. 上一章的章末钩子内容（本章开头需要承接）
-    章节简述参考：{chapter_brief}
+# Step 1: 并行收集上下文 + 初步大纲规划
+# 断点标记: step=context
+parallel:
+  context_data = session: memory-keeper
+    prompt: |
+      为第{chapter_number}章写作准备上下文。请返回：
+      1. 本章涉及的主要角色当前状态（从角色文件读取"当前状态"和"性格特征"段落）
+      2. 相关世界设定要点（只读与本章场景相关的设定，不要全量输出）
+      3. 最近3-5章的摘要（从当前卷分片文件读取）
+      4. 当前活跃的伏笔列表（特别标出紧迫度高的）
+      5. 总大纲中对本章的规划（从 master-outline.md 读取）
+      6. 上一章的章末钩子内容（本章开头需要承接）
+      7. 当前文风指南要点（从 memory/style/style-guide.md 读取基础风格和禁用词表）
+      8. 本章涉及的专有名词（从 memory/style/vocabulary.md 读取相关条目）
+      章节简述参考：{chapter_brief}
+      
+      上下文包总量控制在1万字以内。
 
-# Step 2: 规划章节大纲
+  outline_draft = session: planner
+    prompt: |
+      为第{chapter_number}章创建初步大纲框架。
+      章节简述：{chapter_brief}
+      
+      先基于总大纲中你已知的信息，产出初步的：
+      1. 章节标题方向
+      2. 预期的场景结构（2-3个核心场景）
+      3. 爽点类型预判
+      4. 章末钩子方向
+      
+      注意：下一步你会收到 memory-keeper 提供的完整上下文（角色状态、伏笔、近章摘要等），届时再细化为完整大纲。
+
+# Step 2: 基于完整上下文细化大纲
+# 断点标记: step=outline
 outline = session: planner
   prompt: |
-    为第{chapter_number}章创建详细大纲。
+    基于你刚才的初步框架，结合以下完整上下文，产出第{chapter_number}章的最终详细大纲。
     章节简述：{chapter_brief}
     
     请产出：
@@ -54,9 +75,11 @@ outline = session: planner
        - 具体内容描述
     7. 本章承接上一章钩子的开场方式
     8. 本章给读者的核心情绪是什么（爽/燃/甜/虐/悬疑/恐惧/治愈）
-  context: { context_data }
+    9. **信息控制**：本章释放什么信息、读者会形成什么推测、是否需要误导
+  context: { outline_draft, context_data }
 
 # Step 3: 写正文
+# 断点标记: step=draft
 draft = session: writer
   prompt: |
     按照以下大纲撰写第{chapter_number}章完整正文。
@@ -70,6 +93,7 @@ draft = session: writer
     - 不得违反世界观设定
     - 场景转换要自然流畅
     - 可读性优先：句子清楚、信息明确、场景容易想象、不堆辞藻
+    - 使用上下文中的专有名词标准写法，不要自创新术语
     - 写完后执行自检：
       a. 对照禁用词汇清单全文搜索，确认零命中
       b. 限用词未超标
@@ -78,7 +102,9 @@ draft = session: writer
       e. 本章有明确的推进感和情绪价值
   context: { outline, context_data }
 
-# Step 4: 审校
+# Step 4: 审校（含不合格自动重写，最多重试1次）
+# 断点标记: step=review
+# 注意：传给 editor 的上下文已精简，只包含审校所需的信息
 review = session: editor
   prompt: |
     审校第{chapter_number}章。
@@ -89,7 +115,7 @@ review = session: editor
        - 检查限用词汇是否超标
        - 检查三连排比、匀速段落、解释性叙述等 AI 句式模式
        - 检查对话是否过于书面化
-       - AI味问题超过5处则判定整章不合格，要求重写
+       - AI味问题超过5处则判定整章不合格
     2. **网文质量检测**：
        - 大纲中设计的爽点是否被有效执行（压够了吗？爆到位了吗？）
        - 章末是否有有效钩子（平着结束 = 🔴 严重）
@@ -100,26 +126,119 @@ review = session: editor
     4. 逻辑漏洞和设定冲突
     5. 时间线和空间逻辑
     6. 伏笔处理是否合理
+    7. 专有名词是否使用了标准写法
     
-    输出六维评分表（爽点执行/章末钩子/节奏/情绪价值/AI味/设定一致性）。
-    如有严重问题（含AI味/网文质量不合格），输出修订版正文。
-    如问题较轻，输出审校意见和原文即可。
-    最后列出本章新埋设和已回收的伏笔。
-  context: { draft, outline, context_data }
+    **输出格式要求：**
+    - 报告第一行必须写 `VERDICT: PASS` 或 `VERDICT: FAIL`
+    - FAIL 条件：任何 🔴 严重问题，或 AI 味问题超过 5 处
+    - 输出六维评分表（爽点执行/章末钩子/节奏/情绪价值/AI味/设定一致性，每项1-5星）
+    - 如判定 FAIL，必须输出具体的修改要求清单（逐条列出需要改什么、怎么改）
+    - 如判定 PASS，输出审校意见和原文即可
+    - 最后列出本章新埋设和已回收的伏笔
+  context: { draft, outline }
 
-# Step 5: 归档更新
+# Step 4.1: 如果审校不合格，自动重写一次
+# 断点标记: step=rewrite
+rewrite = session: writer
+  condition: review contains "VERDICT: FAIL"
+  prompt: |
+    你的第{chapter_number}章初稿未通过审校。以下是编辑的修改要求，请逐条修复后重新提交完整正文。
+    
+    要求：
+    - 逐条对照修改要求进行修复
+    - 保持大纲骨架不变，只改有问题的部分
+    - 修复后重新执行自检（禁用词/限用词/句式模式/钩子/推进感）
+    - 在正文末尾附上修改说明（改了哪些地方、为什么这样改）
+  context: { review, outline, context_data }
+
+# Step 4.2: 对重写版再审一次
+final_review = session: editor
+  condition: review contains "VERDICT: FAIL"
+  prompt: |
+    这是第{chapter_number}章的修订版（经过一轮修改后的版本）。请再次审校。
+    
+    重点检查：
+    1. 上一轮提出的 🔴 严重问题是否全部修复
+    2. 修改是否引入了新问题
+    3. 六维评分是否有改善
+    
+    **输出格式：**
+    - 报告第一行写 `VERDICT: PASS` 或 `VERDICT: FAIL`
+    - 如果仍然 FAIL，说明剩余问题，本章将标记为需人工介入
+    - 输出六维评分表
+    - 列出本章新埋设和已回收的伏笔
+  context: { rewrite, outline }
+
+# Step 4.3: 复审仍 FAIL 时，强制通知人工介入
+human_intervention = session: coordinator
+  condition: final_review contains "VERDICT: FAIL"
+  prompt: |
+    第{chapter_number}章经过自动重写后仍未通过复审，需要人工介入。
+    
+    请向用户展示：
+    1. 复审报告中的六维评分表
+    2. 仍未解决的 🔴 严重问题列表
+    3. 正文摘要（前200字 + 后200字）
+    4. 初审和复审的评分对比（是否有改善）
+    
+    请用户判断后选择（回复对应数字）：
+    1. 接受现状 → 以当前版本继续归档
+    2. 提供修改意见 → 请一并给出具体修改要求，writer 会据此再修一版后归档
+    3. 跳过本章 → 标记为待修订，跳过归档直接结束
+    
+    等待用户回复后再继续。如果用户选择 2 并给出修改意见，将意见记录到 human_feedback 中。
+    如果用户选择 3，将 skip_archive 设为 true。
+  context: { final_review, review, rewrite }
+
+# Step 4.3.1: 用户提供修改意见后，writer 执行人工反馈修改
+human_fix = session: writer
+  condition: human_intervention contains "human_feedback"
+  prompt: |
+    第{chapter_number}章需要根据以下人工反馈进行修改：
+    
+    请逐条对照修改要求修复，保持大纲骨架不变。
+    修复后重新执行自检（禁用词/限用词/句式模式）。
+    输出完整的修改后正文。
+  context: { human_intervention, rewrite, outline, context_data }
+
+# Step 4.4: 人工审核卡点（可选，用于关键章节的额外审核）
+# 前3章、卷末章等关键章节建议开启 require_approval=true
+approval = session: coordinator
+  condition: require_approval == "true"
+  prompt: |
+    第{chapter_number}章已完成写作和审校，需要你的确认。
+    
+    请向用户展示：
+    1. 审校报告中的六维评分表
+    2. 正文摘要（前200字 + 后200字）
+    3. 章末钩子内容
+    4. 如果审校有 🟡 问题，列出给用户参考
+    
+    请用户确认后再继续归档。
+    用户可以：
+    - 确认通过 → 继续归档
+    - 要求修改 → 记录修改意见，标记为需人工修订
+    - 跳过本章 → 标记为跳过，继续下一章
+  context: { human_fix or final_review or review }
+
+# Step 5: 归档更新（用户选择"跳过"时不执行）
+# 断点标记: step=archive
 session: memory-keeper
+  condition: human_intervention not contains "skip_archive"
   prompt: |
     第{chapter_number}章已完成审校。请执行归档：
-    1. 提取500字章节摘要，追加到当前卷分片文件 chapters/vol{V}-chapters.md
+    
+    先根据 chapter_number 确定当前所属卷号（查询 chapter-log.md 或 master-outline.md）。
+    
+    1. 提取500字章节摘要，追加到当前卷分片文件 memory/plot/chapters/vol{当前卷号}-chapters.md
     2. 更新 chapter-log.md 索引统计
     3. 更新所有涉及角色的状态文件（memory/characters/）
-    4. 在 foreshadowing.md 活跃伏笔表中登记新伏笔，同时写入 vol{V}-planted.md
+    4. 在 foreshadowing.md 活跃伏笔表中登记新伏笔，同时写入 memory/plot/foreshadowing/vol{当前卷号}-planted.md
     5. 已回收伏笔从活跃表移到 archived.md
-    6. 更新当前卷时间线分片 timelines/vol{V}-timeline.md
-    7. 更新 memory/style/vocabulary.md 中的新术语（如有）
+    6. 更新当前卷时间线分片 memory/plot/timelines/vol{当前卷号}-timeline.md
+    7. 更新 memory/style/vocabulary.md 中本章出现的新术语
     8. 记录本章的章末钩子内容（供下一章开头承接）
-  context: { review }
+  context: { human_fix or rewrite or draft, human_fix or final_review or review }
 
 session "流水线完成。第{chapter_number}章已写作、审校并归档。请查看审校意见和最终正文。"
-  context: { review }
+  context: { human_fix or final_review or review }

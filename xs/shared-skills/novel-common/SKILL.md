@@ -7,9 +7,23 @@ metadata: {"openclaw": {"emoji": "📚", "always": true}}
 
 # 小说创作通用规范
 
+## 数据归属原则
+
+**所有持久化数据统一由 memory-keeper 管理，存储在 memory-keeper 的 workspace 下。** 其他 Agent 不在自己的 workspace 下维护数据副本。
+
+| Agent | 读数据方式 | 写数据方式 |
+|---|---|---|
+| **memory-keeper** | 直接读自己 workspace 下的文件 | 直接写自己 workspace 下的文件 |
+| **planner** | 从 task 传入的上下文中读取 | 作为返回结果输出，由 memory-keeper 持久化 |
+| **writer** | 从 task 传入的上下文中读取 | 正文由 coordinator 写入 `novel/` 目录 |
+| **editor** | 从 task 传入的上下文中读取 | 审校报告作为返回结果输出 |
+| **coordinator** | 调度各 agent，汇总结果 | 写入 `novel/` 正文 + 更新 `progress.md` |
+
+这样做的原因：避免同一数据在多个 workspace 下出现不同版本（数据分裂），保证 memory-keeper 的数据始终是唯一权威源。
+
 ## 文件路径约定
 
-所有 Agent 在读写文件时遵循以下路径规范：
+以下路径均相对于**对应 Agent 自己的 workspace**：
 
 ### 小说正文（存储在 coordinator workspace 下）
 
@@ -71,9 +85,20 @@ workspace-coordinator/novel/
 **其他：**
 - 总大纲：`memory/plot/master-outline.md`
 - 卷大纲：`memory/plot/arc-{卷名}.md`
-- 文风指南：`memory/style/style-guide.md`
+- 文风指南：`memory/style/style-guide.md`（唯一权威源，由 memory-keeper 管理。writer 不维护副本，通过 task 上下文获取）
 - 词汇表：`memory/style/vocabulary.md`
 - 进度：coordinator workspace 下 `memory/plot/progress.md`
+
+**daily/ 目录所有权：**
+
+每个 Agent 只写自己 workspace 下的 `memory/daily/` 目录，内容各不相同：
+
+| Agent | daily/ 写入内容 |
+|---|---|
+| coordinator | 每日进度汇总（Cron 产出） |
+| editor | 每日一致性巡检报告（Cron 产出） |
+| memory-keeper | 数据变更日志（归档操作的详细记录） |
+| planner / writer | 不写 daily/（无此需求） |
 
 ## 章节正文文件格式
 
@@ -137,4 +162,29 @@ workspace-coordinator/novel/
 
 === 大纲规划 ===
 （内容）
+
+=== 文风指南 ===
+（内容）
+
+=== 专有名词 ===
+（内容）
 ```
+
+## OpenProse 流水线与 Workspace 配置的关系
+
+`prose/` 目录下的 `.prose` 文件定义了自动化流水线。其中每个 `agent` 块的 `prompt` 是**补充性质的简短角色提示**，不替代 workspace 下的 SOUL.md / AGENTS.md / TOOLS.md 配置。
+
+优先级关系：
+- **Workspace 配置**（SOUL.md + AGENTS.md + TOOLS.md + Skills）= Agent 的核心人格和行为规范，始终生效
+- **Prose agent prompt** = 当前流水线中的补充指令，对特定任务做额外强调
+
+因此：
+- Prose 中的 agent prompt 应保持简短（1-2句），只强调该流水线最关键的要求
+- 详细的规则、清单、格式模板等不应放在 prose prompt 中（已在 workspace 配置里）
+- 如果 prose prompt 与 workspace 配置冲突，以 workspace 配置为准
+
+## 断点恢复机制
+
+写作流水线每完成一个关键步骤后，coordinator 应更新 `progress.md` 的"进行中任务"区段，记录当前步骤状态。如果流水线因故中断（API 超时、模型不可用等），可以从断点恢复而不需要重头开始。
+
+断点步骤标记：`context` → `outline` → `draft` → `review` → `rewrite` → `archive`

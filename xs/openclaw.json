@@ -209,7 +209,7 @@
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 200000,
-            "maxTokens": 8192
+            "maxTokens": 16384
           }
         ]
       }
@@ -217,29 +217,13 @@
   },
 
   "cron": {
-    "jobs": [
-      {
-        "id": "consistency-check",
-        "schedule": "0 3 * * *",
-        "agentId": "editor",
-        "task": "执行每日一致性检查：读取 memory/review/ 下的 chapter-log.md 和 characters/ 目录下所有角色文件，检查最近写完的章节是否存在人物性格矛盾、时间线错误、设定冲突。将发现的问题写入 memory/daily/YYYY-MM-DD.md。",
-        "session": "cron:consistency"
-      },
-      {
-        "id": "foreshadowing-audit",
-        "schedule": "0 4 * * 0",
-        "agentId": "editor",
-        "task": "执行每周伏笔审计：读取 memory/review/foreshadowing-report.md，标记超过20章未回收的伏笔为'高风险'，生成审计报告写入 memory/review/foreshadow-audit-YYYY-MM-DD.md。",
-        "session": "cron:foreshadow"
-      },
-      {
-        "id": "progress-summary",
-        "schedule": "0 22 * * *",
-        "agentId": "coordinator",
-        "task": "生成每日写作进度摘要：统计今日完成章节、总字数变化、待处理任务，更新 memory/plot/progress.md。",
-        "session": "cron:progress"
-      }
-    ]
+    "enabled": true,
+    "maxConcurrentRuns": 2,
+    "sessionRetention": "48h",
+    "runLog": {
+      "maxBytes": "2mb",
+      "keepLines": 2000
+    }
   },
 
   "plugins": {

@@ -19,12 +19,43 @@
 
 ### 写一章
 
-1. spawn `memory-keeper` → 查询本章所需上下文（角色状态、设定、伏笔、近章摘要）
-2. spawn `planner` → 基于上下文产出章节大纲
+标准流水线（详见 `skills/novel-write/SKILL.md`）：
+
+1. **并行**：spawn `memory-keeper`（查询上下文）+ spawn `planner`（初步框架）
+2. spawn `planner` → 合并上下文，产出最终大纲
 3. spawn `writer` → 基于大纲 + 上下文写正文
-4. spawn `editor` → 审校正文
-5. spawn `memory-keeper` → 更新角色状态、登记伏笔、写入章节摘要
-6. 将最终正文保存到 `novel/` 目录
+4. spawn `editor` → 审校正文（FAIL 时自动触发 writer 重写 → editor 复审，最多 1 次；复审仍 FAIL 则暂停通知人工介入）
+5. spawn `memory-keeper` → 归档（摘要 + 角色 + 伏笔 + 时间线 + 词汇表）
+6. 将最终正文保存到 `novel/` 目录，更新 `progress.md`
+
+### 人工审核卡点
+
+以下章节建议开启人工审核（`require_approval=true`）：
+- **前 3 章**（开篇生死线）
+- **每卷最后一章**（卷末高潮）
+- **关键转折章节**（大反转、身份揭晓等）
+
+开启后，审校完成后会向用户展示评分和摘要，等待确认再归档。
+
+### 断点恢复
+
+当流水线因故中断（API 超时、模型不可用等），`progress.md` 的"进行中任务"区段会记录断点信息。恢复时：
+
+1. 读取 `progress.md` 的"进行中任务"区段
+2. 根据 `step` 字段判断中断在哪一步
+3. 已完成的步骤不需要重新执行，从断点步骤继续
+4. 恢复完成后，清空"进行中任务"区段
+
+每完成一个关键步骤，更新 `progress.md` 中的断点信息：
+
+| step 值 | 含义 | 已有产物 |
+|---|---|---|
+| `context` | 上下文收集中 | 无 |
+| `outline` | 大纲规划中 | 上下文已就绪 |
+| `draft` | 正文写作中 | 上下文 + 大纲已就绪 |
+| `review` | 审校中 | 上下文 + 大纲 + 初稿已就绪 |
+| `rewrite` | 重写中 | 上下文 + 大纲 + 初稿 + 审校意见已就绪 |
+| `archive` | 归档中 | 最终正文已就绪 |
 
 ### 新建小说项目
 
@@ -35,13 +66,18 @@
 
 ### 查看进度
 
-读取 `memory/plot/progress.md`，向用户汇报当前写作状态。
+读取 `memory/plot/progress.md`，向用户汇报：
+- 当前写作状态（最新章节、总字数）
+- 质量趋势（最近章节的六维评分变化）
+- 风险提醒（伏笔超期、连续低分等）
+- 进行中任务（如有中断的流水线）
 
 ## 文件约定
 
-- 章节正文存储在 `novel/vol{卷号}/chapter-{章节号}.md`
-- 进度追踪文件 `memory/plot/progress.md`
-- 每日工作日志 `memory/daily/YYYY-MM-DD.md`
+- 章节正文：`novel/vol{卷号}/chapter-{章节号}-{章名拼音}.md`
+- 进度追踪：`memory/plot/progress.md`（含断点信息和质量趋势）
+- 元数据索引：`novel/metadata.md`
+- 每日工作日志：`memory/daily/YYYY-MM-DD.md`
 
 ## 行为准则
 
@@ -50,3 +86,6 @@
 - 遇到不确定的创作方向时，先询问用户而不是自行决定
 - 每次写完一章后主动汇报进度和下一步计划
 - 在调度 writer 之前，必须先通过 memory-keeper 获取完整上下文
+- 每完成一个流水线步骤，更新 progress.md 中的断点信息
+- 流水线完成后，将六维评分追加到 progress.md 的"质量趋势"表
+- 发现连续 3 章某项评分低于 3 星时，主动向用户预警

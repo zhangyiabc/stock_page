@@ -6,7 +6,7 @@ input revision_notes: "修订要求（用户的修改意见）"
 
 agent memory-keeper:
   model: minimax/MiniMax-M2.5
-  prompt: "你是小说数据库管理员。精确查询和返回角色状态、世界设定、伏笔信息。"
+  prompt: "你是小说数据库管理员。精确查询和返回角色状态、世界设定、伏笔信息、章节原文。"
 
 agent writer:
   model: openrouter/moonshotai/kimi-k2.5
@@ -14,17 +14,32 @@ agent writer:
 
 agent editor:
   model: zai/glm-5
-  prompt: "你是资深编辑。审校修订版正文，确保修改到位且没有引入新问题。"
+  prompt: "你是资深编辑。审校修订版正文，确保修改到位且没有引入新问题。在报告开头用 VERDICT: PASS 或 VERDICT: FAIL 标注。"
 
-# Step 1: 获取上下文和原文
+# Step 1: 获取原文 + 上下文（memory-keeper 统一读取，通过 context 传递）
 context_data = session: memory-keeper
   prompt: |
-    为第{chapter_number}章修订准备上下文：
-    1. 该章的角色状态和设定约束
-    2. 前后章节摘要（用于检查衔接）
-    3. 该章涉及的伏笔
+    为第{chapter_number}章修订准备完整上下文：
+    1. **原文全文**：从 coordinator workspace 的 novel/ 目录读取第{chapter_number}章的完整正文
+    2. 该章涉及角色的当前状态和设定约束
+    3. 前后章节摘要（用于检查衔接）
+    4. 该章涉及的伏笔（活跃伏笔表中与本章相关的条目）
+    5. 当前文风指南要点（从 memory/style/style-guide.md 读取核心规则）
+    
+    请将原文全文完整包含在返回结果中，格式如下：
+    === 原文全文 ===
+    （完整正文内容）
+    
+    === 角色状态 ===
+    （角色信息）
+    
+    === 前后章摘要 ===
+    （摘要）
+    
+    === 相关伏笔 ===
+    （伏笔信息）
 
-# Step 2: 修订
+# Step 2: 修订（writer 从 context 获取原文，无需跨 workspace 读取）
 revised = session: writer
   prompt: |
     修订第{chapter_number}章。
@@ -32,11 +47,14 @@ revised = session: writer
     修订要求：
     {revision_notes}
     
-    请读取原文 novel/ 目录下对应文件，按修订要求修改。
+    原文和上下文已包含在 context 中（在"=== 原文全文 ==="标记下）。
+    
     修订时注意：
     - 只改需要改的部分，保持其余部分不变
     - 确保修改不引入新的设定冲突
     - 保持文风一致
+    - 修订后执行自检（禁用词/限用词/句式模式）
+    - 输出完整的修订后正文（不是只输出改动部分）
   context: { context_data }
 
 # Step 3: 审校修订版
@@ -46,8 +64,14 @@ review = session: editor
     
     重点检查：
     1. 修订要求是否全部满足
-    2. 修改是否引入了新的问题
+    2. 修改是否引入了新的问题（设定冲突/人设矛盾/时间线错误）
     3. 与前后章节的衔接是否仍然通顺
+    4. AI 味检测（修订部分是否有 AI 味）
+    5. 修订部分的文风是否与保留部分一致
+    
+    **输出格式：**
+    - 第一行写 `VERDICT: PASS` 或 `VERDICT: FAIL`
+    - 如判定 FAIL，列出具体问题和修改建议
   context: { revised, context_data }
 
 # Step 4: 更新记忆（如果修改影响了角色状态或伏笔）
@@ -56,9 +80,10 @@ session: memory-keeper
     第{chapter_number}章已修订。检查修订内容是否影响了：
     1. 角色状态（如有变化则更新角色文件）
     2. 伏笔（如有变化则更新伏笔追踪表）
-    3. 章节摘要（如有重大情节变化则更新 chapter-log.md 中的摘要）
+    3. 章节摘要（如有重大情节变化则更新对应卷分片中的摘要）
+    4. 时间线（如有事件变化则更新卷时间线分片）
     如果修订仅涉及文笔润色，不需要更新。
-  context: { review }
+  context: { revised, review }
 
 session "第{chapter_number}章修订完成。"
   context: { review }

@@ -357,6 +357,13 @@ openclaw gateway --port 18789
 
 # 7. 验证 Agent 配置
 openclaw agents list --bindings
+
+# 8. 注册定时任务（Cron Jobs）
+# OpenClaw 的 cron jobs 通过 CLI 注册，不是在 openclaw.json 中定义
+bash scripts/setup-cron-jobs.sh
+
+# 验证 cron 任务
+openclaw cron list
 ```
 
 ### 初始化小说项目
@@ -528,8 +535,6 @@ xiaoshuo/
 ├── workspace-writer/                      # Writer Agent
 │   ├── AGENTS.md / SOUL.md / IDENTITY.md / TOOLS.md / MEMORY.md
 │   └── memory/
-│       ├── style/
-│       │   └── style-guide.md             #   文风指南
 │       └── daily/
 │
 ├── workspace-editor/                      # Editor Agent
@@ -651,11 +656,23 @@ Session 接近上下文窗口上限时，OpenClaw 自动触发 Memory Flush，�
 
 ## 定时任务（Cron）
 
+> **注意：** OpenClaw 的 cron jobs 通过 `openclaw cron add` CLI 命令注册，存储在 `~/.openclaw/cron/jobs.json`。  
+> `openclaw.json` 中的 `cron` 字段仅控制全局开关（enabled、maxConcurrentRuns 等），不定义具体 job。  
+> 首次部署时运行 `bash scripts/setup-cron-jobs.sh` 完成注册。
+
 | 任务 | 执行 Agent | 时间 | 内容 |
 |---|---|---|---|
 | 一致性巡检 | Editor | 每天 03:00 | 检查最近章节的人设/时间线/设定矛盾 |
 | 伏笔审计 | Editor | 每周日 04:00 | 标记超期伏笔，生成审计报告 |
 | 进度汇总 | Coordinator | 每天 22:00 | 统计当日写作进展，更新进度文件 |
+
+常用操作：
+```bash
+openclaw cron list                    # 查看所有任务
+openclaw cron run <jobId>             # 手动触发
+openclaw cron runs --id <jobId>       # 查看运行历史
+openclaw cron edit <jobId> --message "新提示词"  # 修改任务
+```
 
 ---
 

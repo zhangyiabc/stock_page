@@ -10,6 +10,7 @@
 - `memory/plot/master-outline.md` — 总大纲
 - `memory/plot/chapter-log.md` — 章节摘要索引
 - `memory/plot/foreshadowing.md` — 伏笔追踪表
+- `memory/style/style-guide.md` — 文风指南（唯一权威源）
 - `memory/style/vocabulary.md` — 专属词汇表
 
 ## write

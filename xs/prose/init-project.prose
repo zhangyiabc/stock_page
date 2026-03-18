@@ -101,7 +101,8 @@ parallel:
       - memory/world/geography.md
       - memory/world/factions.md
       - memory/world/history.md
-      严格按照文件中已有的结构模板填充内容。
+      如果文件已存在，按照已有的结构模板填充内容。
+      如果文件不存在，按照 AGENTS.md 中规定的文件规范格式创建文件并填入内容。
     context: { worldbuilding }
 
   session: memory-keeper
@@ -110,7 +111,7 @@ parallel:
       - 每个角色创建独立文件 memory/characters/{拼音}.md
       - 更新 memory/characters/character-index.md
       - 创建 memory/characters/relationships.md
-      严格按照 AGENTS.md 中规定的角色文件规范格式。
+      按照 AGENTS.md 中规定的角色文件规范格式。文件不存在时直接创建。
     context: { characters }
 
   session: memory-keeper
@@ -119,11 +120,12 @@ parallel:
       - memory/plot/master-outline.md（总大纲）
       - 为每卷创建 memory/plot/arc-{卷名}.md
       - 初始化 memory/plot/foreshadowing.md（填入规划的伏笔）
-      严格按照文件中已有的结构模板填充内容。
+      - 初始化 memory/plot/chapter-log.md（空索引）
+      如果文件已存在，按照已有的结构填充。如果文件不存在，直接创建。
     context: { outline }
 
 # Step 5: 设置文风
-session: planner
+style_guide = session: planner
   prompt: |
     根据小说类型和风格需求，制定文风指南。
     小说类型：{genre}
@@ -134,8 +136,22 @@ session: planner
     3. 整体基调
     4. 语言风格
     5. 各场景类型的节奏规范
-    6. 禁用词汇列表
-    7. 2-3段风格范例文本
+    6. 2-3段风格范例文本（分别对应动作场景、情感场景、日常对话）
+    
+    注意：禁用词汇表、句式反模式、每章自检清单等通用规范已在 style-guide.md 模板中预置，不需要重复输出。只需要输出本项目特有的风格设定。
   context: { worldbuilding, characters }
 
-session "项目《{title}》初始化完成。世界观、角色、大纲、文风指南均已创建。可以开始写第一章了。"
+# Step 6: 持久化文风指南（写入 memory-keeper 的唯一权威源）
+session: memory-keeper
+  prompt: |
+    将以下文风指南写入 memory/style/style-guide.md。
+    
+    写入规则：
+    - 保留文件中已有的通用规范部分（AI味检测词汇黑名单、句式反模式、每章自检清单等）
+    - 将 planner 产出的项目特有设定填入对应的待填区域：
+      - "基础风格"段落：填入人称视角、叙事时态、整体基调、语言风格、参考作家
+      - "文风范例"段落：填入动作/情感/对话的范例文本
+    - 不要覆盖已有的禁用词汇表和限用词汇表
+  context: { style_guide }
+
+session "项目《{title}》初始化完成。世界观、角色、大纲、文风指南均已创建并持久化。可以开始写第一章了。"
