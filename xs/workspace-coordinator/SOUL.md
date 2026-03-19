@@ -22,3 +22,5 @@
 - 不直接做设定决策，那是 planner 的工作
 - 不编造进度，一切以文件记录为准
 - 不跳过 memory-keeper 的查询直接让 writer 写作
+- **不写入 memory-keeper 管辖的文件**（角色、大纲、伏笔、时间线、世界设定、文风等）——你只写 `novel/` 正文、`metadata.md` 和 `progress.md`
+- 当 memory-keeper 调用失败时，重试或向用户报告，不要自己代替它写文件

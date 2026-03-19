@@ -46,9 +46,9 @@
         "model": "zai/glm-4.7",
         "memoryFlush": {
           "enabled": true,
-          "softThresholdTokens": 8000,
-          "systemPrompt": "会话即将压缩。请将当前创作中的关键决定、人物变化、伏笔信息保存到对应 memory 文件。",
-          "prompt": "将本轮对话中重要的创作信息写入 memory/ 目录下对应文件；如果没有需要保存的内容，回复 NO_REPLY。"
+          "softThresholdTokens": 6000,
+          "systemPrompt": "会话即将压缩。注意数据归属：只有 memory-keeper 可以写入 memory/ 目录下的角色、大纲、伏笔等文件。coordinator 只能写入 progress.md。其他 agent 不写任何文件。",
+          "prompt": "如果你是 coordinator，将当前流水线进度摘要写入 memory/plot/progress.md；如果你是 memory-keeper，将关键的角色变化和伏笔信息写入对应 memory 文件；如果你是其他 agent（planner/writer/editor），回复 NO_REPLY。"
         }
       },
       "subagents": {

@@ -1,5 +1,7 @@
 # 批量写作流水线（连续写多章）
 # 用法: /prose run batch-write.prose
+# ⚠ 核心原则：逐章串行。每章走完 Step 1-5 全流程后才开始下一章。
+# 禁止先统一规划所有章节大纲再统一写正文。
 
 input start_chapter: "起始章节号"
 input end_chapter: "结束章节号"
@@ -38,7 +40,8 @@ loop chapter_number from {start_chapter} to {end_chapter}:
         6. 上一章的章末钩子内容
         7. 当前文风指南要点（从 memory/style/style-guide.md 读取基础风格和禁用词表）
         8. 本章涉及的专有名词（从 memory/style/vocabulary.md 读取相关条目）
-        上下文包总量控制在1万字以内。
+        
+        ⚠ 上下文包总量控制在1万字以内，精炼要点，不要复制原文大段落。
 
     outline_draft = session: planner
       prompt: |
@@ -48,6 +51,8 @@ loop chapter_number from {start_chapter} to {end_chapter}:
         2. 预期的场景结构（2-3个核心场景）
         3. 爽点类型预判
         4. 章末钩子方向
+        
+        ⚠ 初步框架控制在 1500 字以内，只输出框架要点。
 
   # Step 2: 细化大纲
   outline = session: planner
@@ -67,6 +72,8 @@ loop chapter_number from {start_chapter} to {end_chapter}:
       8. 本章承接上一章钩子的开场方式
       9. 本章给读者的核心情绪
       10. **信息控制**：本章释放什么信息、读者会形成什么推测、是否需要误导
+      
+      ⚠ 大纲控制在 3000 字以内，聚焦场景、爽点和钩子，不要写散文式描述。
     context: { outline_draft, context_data }
 
   # Step 3: 写正文
@@ -102,9 +109,12 @@ loop chapter_number from {start_chapter} to {end_chapter}:
       
       **输出格式：**
       - 第一行写 `VERDICT: PASS` 或 `VERDICT: FAIL`
+      - ⚠ 一致性校验：标了 🔴 就必须 FAIL，给了 PASS 就不能有 🔴
       - 输出六维评分表（每项1-5星）
-      - FAIL 时输出具体修改要求清单
+      - FAIL 时：输出具体修改要求清单
+      - PASS 时：🟡/🟢 建议仅供参考，不会触发改写
       - 列出本章新埋设和已回收的伏笔
+      - ⚠ 审校报告控制在 1500 字以内，PASS 时不要附带正文全文
     context: { draft, outline }
 
   # Step 4.1: 不合格时自动重写
@@ -113,7 +123,7 @@ loop chapter_number from {start_chapter} to {end_chapter}:
     prompt: |
       第{chapter_number}章初稿未通过审校，请逐条修复后重新提交完整正文。
       保持大纲骨架不变，只改有问题的部分。修复后重新自检。
-    context: { review, outline, context_data }
+    context: { review, outline }
 
   # Step 4.2: 重写后再审
   final_review = session: editor
@@ -122,6 +132,7 @@ loop chapter_number from {start_chapter} to {end_chapter}:
       审校第{chapter_number}章修订版。重点检查上轮 🔴 问题是否修复、是否引入新问题。
       第一行写 `VERDICT: PASS` 或 `VERDICT: FAIL`。
       输出六维评分表。
+      ⚠ 报告控制在 1500 字以内。
     context: { rewrite, outline }
 
   # Step 4.3: 复审仍 FAIL 时，强制通知人工介入
@@ -154,7 +165,7 @@ loop chapter_number from {start_chapter} to {end_chapter}:
       请逐条对照修改要求修复，保持大纲骨架不变。
       修复后重新执行自检（禁用词/限用词/句式模式）。
       输出完整的修改后正文。
-    context: { human_intervention, rewrite, outline, context_data }
+    context: { human_intervention, rewrite }
 
   # Step 4.4: 人工审核卡点（仅在指定章节触发）
   # 使用精确列表匹配避免子串误匹配（如 "3" 不会匹配到 "30"）
@@ -179,6 +190,8 @@ loop chapter_number from {start_chapter} to {end_chapter}:
       6. 更新当前卷时间线分片
       7. 更新 vocabulary.md 中本章出现的新术语
       8. 记录本章的章末钩子内容
+      
+      ⚠ 归档完成后只返回更新摘要，控制在 500 字以内。列出更新了哪些文件即可，不要回显文件内容。
     context: { human_fix or rewrite or draft, human_fix or final_review or review }
 
   session "第{chapter_number}章完成。"

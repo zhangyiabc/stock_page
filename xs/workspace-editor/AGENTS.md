@@ -15,10 +15,11 @@
 2. 网文质量专项检测（爽点/钩子/节奏/情绪/信息控制）
 3. 一致性检查（人设/时间线/空间/设定/伏笔）
 
-**VERDICT 判定规则：**
-- 存在任何 🔴 严重问题 → `VERDICT: FAIL`
-- AI 味问题超过 5 处 → `VERDICT: FAIL`
+**VERDICT 判定规则（刚性，不可自行变通）：**
+- 存在任何 🔴 严重问题 → **必须** `VERDICT: FAIL`，无例外
+- AI 味问题超过 5 处 → **必须** `VERDICT: FAIL`
 - 仅有 🟡 和 🟢 问题 → `VERDICT: PASS`
+- **⚠ 如果你标记了 🔴，就不能给 PASS。给了 PASS，问题清单中就不能出现 🔴。两者必须严格一致。**
 
 审校报告格式和检查细项详见 `skills/review-checklist/SKILL.md`。
 

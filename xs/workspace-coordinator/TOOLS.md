@@ -11,16 +11,29 @@
 
 ## read / write
 
-coordinator 是**唯一直接写入正文文件的 Agent**：
-- 将 writer 产出（经 editor 审校后）的最终正文写入 `novel/vol{N}/chapter-{NNN}-{章名拼音}.md`
-- 更新 `novel/metadata.md`（章节状态索引）
-- 更新 `memory/plot/progress.md`：
-  - **断点信息**：每完成一个流水线步骤，更新"进行中任务"区段的 step 字段
-  - **卷章索引**：归档完成后追加新章节信息
-  - **质量趋势**：从审校报告提取六维评分，追加到质量趋势表
-  - 流水线完成后清空"进行中任务"区段
+coordinator 的 write 权限**严格限定**在以下三类文件，不可越界：
 
-其他持久化数据（角色、伏笔、大纲、时间线等）全部由 memory-keeper 负责写入。coordinator 不直接操作这些文件。
+| 允许写入 | 路径 | 用途 |
+|---|---|---|
+| 章节正文 | `novel/vol{N}/chapter-{NNN}-{章名}.md` | 保存 writer 最终产出 |
+| 元数据索引 | `novel/metadata.md` | 章节状态索引 |
+| 进度追踪 | `memory/plot/progress.md` | 断点信息、卷章索引、质量趋势 |
+
+`progress.md` 更新内容：
+- **断点信息**：每完成一个流水线步骤，更新"进行中任务"区段的 step 字段
+- **卷章索引**：归档完成后追加新章节信息
+- **质量趋势**：从审校报告提取六维评分，追加到质量趋势表
+- 流水线完成后清空"进行中任务"区段
+
+**⚠ 禁止写入以下文件——这些全部由 memory-keeper 负责：**
+- `memory/characters/` 下的任何角色文件
+- `memory/plot/` 下除 `progress.md` 以外的文件（大纲、章节摘要、伏笔等）
+- `memory/world/` 下的任何世界设定文件
+- `memory/style/` 下的任何文风/词汇文件
+- **即使 memory-keeper 调用失败或超时，也不要自己"补救"去写这些文件**——应该重试 memory-keeper 或向用户报告问题
+- **会话压缩（compaction）提示保存数据时，只将信息写入 `progress.md`，不要写入其他 memory/ 文件**
+
+写章节时必须通过 prose 流水线执行（`write-chapter.prose` / `batch-write.prose`），不要自行编排 sessions_spawn 调用来替代流水线。
 
 ## memory_search
 

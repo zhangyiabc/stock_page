@@ -17,16 +17,50 @@
 
 ## 核心工作流
 
+### ⚠ 最重要的规则：必须使用 Prose 流水线
+
+**写章节时必须通过 OpenProse 流水线执行，不要自行编排步骤。**
+
+- 写单章：执行 `write-chapter.prose`
+- 写多章：执行 `batch-write.prose`
+- 初始化项目：执行 `init-project.prose`
+- 修订章节：执行 `revise-chapter.prose`
+
+**禁止行为：**
+- 不要"先统一规划所有章节大纲，再统一写所有正文"——必须逐章完成完整流水线（上下文→大纲→正文→审校→归档），一章全部完成后再开始下一章
+- 不要跳过流水线中的任何步骤（特别是审校和归档）
+- 不要自己直接调度多个 agent 来"替代"流水线
+
 ### 写一章
 
-标准流水线（详见 `skills/novel-write/SKILL.md`）：
+执行 `write-chapter.prose` 流水线（详见 `skills/novel-write/SKILL.md`）：
 
 1. **并行**：spawn `memory-keeper`（查询上下文）+ spawn `planner`（初步框架）
 2. spawn `planner` → 合并上下文，产出最终大纲
 3. spawn `writer` → 基于大纲 + 上下文写正文
-4. spawn `editor` → 审校正文（FAIL 时自动触发 writer 重写 → editor 复审，最多 1 次；复审仍 FAIL 则暂停通知人工介入）
+4. spawn `editor` → 审校正文：
+   - **PASS** → 直接进入归档，不调用 writer 改写。报告中的 🟡/🟢 建议是参考意见，不需要执行
+   - **FAIL** → 自动触发 writer 重写 → editor 复审，最多 1 次；复审仍 FAIL 则暂停通知人工介入
 5. spawn `memory-keeper` → 归档（摘要 + 角色 + 伏笔 + 时间线 + 词汇表）
 6. 将最终正文保存到 `novel/` 目录，更新 `progress.md`
+
+### 写多章（批量写作）
+
+执行 `batch-write.prose` 流水线。**核心原则是逐章串行**：
+
+```
+for chapter in range(start, end):
+    1. 收集本章上下文（包含前一章归档后的最新状态）
+    2. 规划本章大纲
+    3. 写本章正文
+    4. 审校本章
+    5. 归档本章（更新角色状态、伏笔、摘要等）
+    → 然后才进入下一章
+```
+
+**为什么必须逐章串行？**
+- 第 N+1 章的上下文依赖第 N 章的归档结果（角色状态变化、新伏笔、章末钩子）
+- 如果先批量规划大纲再批量写正文，后面章节无法感知前面章节的实际产出，会导致角色行为不连贯、伏笔丢失、钩子断裂
 
 ### 人工审核卡点
 
@@ -74,7 +108,7 @@
 
 ## 文件约定
 
-- 章节正文：`novel/vol{卷号}/chapter-{章节号}-{章名拼音}.md`
+- 章节正文：`novel/vol{卷号}/chapter-{章节号}-{章名}.md`
 - 进度追踪：`memory/plot/progress.md`（含断点信息和质量趋势）
 - 元数据索引：`novel/metadata.md`
 - 每日工作日志：`memory/daily/YYYY-MM-DD.md`
@@ -89,3 +123,20 @@
 - 每完成一个流水线步骤，更新 progress.md 中的断点信息
 - 流水线完成后，将六维评分追加到 progress.md 的"质量趋势"表
 - 发现连续 3 章某项评分低于 3 星时，主动向用户预警
+
+### ⚠ 审校结果处理规则
+
+**严格按 VERDICT 行事，不要自行"过度解读"审校报告：**
+
+- `VERDICT: PASS` → **直接归档**。报告中的 🟡/🟢 建议是参考意见，不要额外调用 writer 改写
+- `VERDICT: FAIL` → 按流水线触发重写流程
+- 如果审校报告中出现 🔴 但 VERDICT 写的是 PASS，视为 editor 输出错误，应按 FAIL 处理（有 🔴 就是 FAIL）
+
+### ⚠ 数据归属红线
+
+**你只能写入三类文件**：`novel/` 正文、`novel/metadata.md`、`memory/plot/progress.md`。
+
+角色档案、大纲、伏笔、时间线、世界设定、文风指南、词汇表等持久化数据**全部由 memory-keeper 写入**。即使 memory-keeper 调用失败或超时：
+- **不要自己代替 memory-keeper 写入这些文件**
+- 应该重试 spawn memory-keeper，或向用户报告错误并等待指示
+- 会话压缩时，只将关键决策信息写入 `progress.md`

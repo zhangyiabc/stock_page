@@ -11,13 +11,13 @@ metadata: {"openclaw": {"emoji": "📚", "always": true}}
 
 **所有持久化数据统一由 memory-keeper 管理，存储在 memory-keeper 的 workspace 下。** 其他 Agent 不在自己的 workspace 下维护数据副本。
 
-| Agent | 读数据方式 | 写数据方式 |
-|---|---|---|
-| **memory-keeper** | 直接读自己 workspace 下的文件 | 直接写自己 workspace 下的文件 |
-| **planner** | 从 task 传入的上下文中读取 | 作为返回结果输出，由 memory-keeper 持久化 |
-| **writer** | 从 task 传入的上下文中读取 | 正文由 coordinator 写入 `novel/` 目录 |
-| **editor** | 从 task 传入的上下文中读取 | 审校报告作为返回结果输出 |
-| **coordinator** | 调度各 agent，汇总结果 | 写入 `novel/` 正文 + 更新 `progress.md` |
+| Agent | 读数据方式 | 写数据方式 | 禁止操作 |
+|---|---|---|---|
+| **memory-keeper** | 直接读自己 workspace 下的文件 | 直接写自己 workspace 下的文件 | — |
+| **planner** | 从 task 传入的上下文中读取 | 作为返回结果输出，由 memory-keeper 持久化 | **禁止写入任何 memory/ 文件，禁止调用 sessions_spawn** |
+| **writer** | 从 task 传入的上下文中读取 | 正文由 coordinator 写入 `novel/` 目录 | 禁止写入 memory/ 文件 |
+| **editor** | 从 task 传入的上下文中读取 | 审校报告作为返回结果输出 | 禁止写入 memory/ 文件（Cron 任务除外） |
+| **coordinator** | 调度各 agent，汇总结果 | 写入 `novel/` 正文 + 更新 `progress.md` | 禁止自行编排步骤替代 prose 流水线 |
 
 这样做的原因：避免同一数据在多个 workspace 下出现不同版本（数据分裂），保证 memory-keeper 的数据始终是唯一权威源。
 
@@ -27,8 +27,8 @@ metadata: {"openclaw": {"emoji": "📚", "always": true}}
 
 ### 小说正文（存储在 coordinator workspace 下）
 
-- 路径格式：`novel/vol{卷号}/chapter-{三位数章节号}-{章名拼音}.md`
-- 示例：`novel/vol1/chapter-001-hunshi-mowan.md`、`novel/vol3/chapter-087-longhu-fengyun.md`
+- 路径格式：`novel/vol{卷号}/chapter-{三位数章节号}-{章名}.md`
+- 示例：`novel/vol1/chapter-001-出山.md`、`novel/vol3/chapter-087-龙虎风云.md`
 - 章节号全局递增，不按卷重置（第二卷第一章是 chapter-031 而不是 chapter-001）
 - 每卷一个子目录，卷号用阿拉伯数字
 
@@ -36,25 +36,23 @@ metadata: {"openclaw": {"emoji": "📚", "always": true}}
 ```
 workspace-coordinator/novel/
 ├── vol1/
-│   ├── chapter-001-chushan.md            # 第1章 出山
-│   ├── chapter-002-guren-xiangfeng.md    # 第2章 故人相逢
-│   ├── chapter-003-yexu.md               # 第3章 夜雨
-│   └── ...chapter-030-fengbao-qianxi.md  # 第30章 风暴前夕
+│   ├── chapter-001-出山.md               # 第1章 出山
+│   ├── chapter-002-故人相逢.md           # 第2章 故人相逢
+│   ├── chapter-003-夜雨.md               # 第3章 夜雨
+│   └── ...chapter-030-风暴前夕.md        # 第30章 风暴前夕
 ├── vol2/
-│   ├── chapter-031-pojing.md             # 第31章 破镜
+│   ├── chapter-031-破镜.md               # 第31章 破镜
 │   └── ...
 ├── vol10/
-│   └── chapter-280-zhongjie.md
+│   └── chapter-280-终结.md
 └── metadata.md                            # 全书元数据（卷章对照、总字数统计）
 ```
 
 **命名规则：**
 - 章节号固定三位数字，不足补零：`001`, `002`, ..., `999`
 - 如超过999章，扩展为四位：`chapter-1000-xxx.md`
-- 章名部分使用拼音小写，多字词用连字符分隔：`guren-xiangfeng`
-- 拼音取章名关键词，控制在 2-4 个词以内，不需要标注声调
-- 如果章名较长，可适当缩写：「第一百章 风起云涌天下乱」→ `chapter-100-fengqi-yunyong.md`
-- 文件名全小写，不含中文字符，确保跨平台兼容
+- 章名部分直接使用中文章名
+- 如果章名较长，可适当缩写：「第一百章 风起云涌天下乱」→ `chapter-100-风起云涌.md`
 
 ### 记忆文件（memory-keeper workspace 下）
 
@@ -122,7 +120,7 @@ workspace-coordinator/novel/
 
 - 文件内的 `# 第X章 {章节标题}` 使用中文章名
 - metadata 中的 `title` 字段也记录中文章名，用于程序化检索
-- 文件名中的拼音与内容中的中文章名必须对应
+- 文件名中的章名与内容中的章名必须一致
 
 ## 伏笔 ID 规范
 
@@ -182,6 +180,8 @@ workspace-coordinator/novel/
 - Prose 中的 agent prompt 应保持简短（1-2句），只强调该流水线最关键的要求
 - 详细的规则、清单、格式模板等不应放在 prose prompt 中（已在 workspace 配置里）
 - 如果 prose prompt 与 workspace 配置冲突，以 workspace 配置为准
+
+**⚠ Prose 流水线是强制执行路径。** 写章节时 coordinator 必须通过对应的 prose 流水线执行，不得自行编排步骤或改变执行顺序。批量写作时必须逐章串行（每章走完完整流水线后才开始下一章），禁止先统一规划再统一写作。
 
 ## 断点恢复机制
 
