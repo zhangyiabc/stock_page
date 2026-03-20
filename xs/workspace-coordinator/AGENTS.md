@@ -46,17 +46,20 @@
 
 ### 写多章（批量写作）
 
-执行 `batch-write.prose` 流水线。**核心原则是逐章串行**：
+执行 `batch-write.prose`，它会指导你**逐章调用 `write-chapter.prose`**：
 
 ```
 for chapter in range(start, end):
-    1. 收集本章上下文（包含前一章归档后的最新状态）
-    2. 规划本章大纲
-    3. 写本章正文
-    4. 审校本章
-    5. 归档本章（更新角色状态、伏笔、摘要等）
-    → 然后才进入下一章
+    /prose run write-chapter.prose（chapter_number=N, ...）
+    → 完整走完 Step 1-5 全流程
+    → 归档完成，更新 progress.md
+    → 然后才开始下一章
 ```
+
+**为什么每章是独立的 prose 执行？**
+- 每章的子 agent（planner/writer/editor/memory-keeper）都在全新 session 中运行，上下文干净
+- 避免多章连写时 coordinator session 累积溢出（每章产生 ~15K tokens，连写 10+ 章必然溢出）
+- 章与章之间的连续性通过 memory-keeper 的**持久化文件**保证（角色状态、章节摘要、伏笔、钩子等），不依赖 session 记忆
 
 **为什么必须逐章串行？**
 - 第 N+1 章的上下文依赖第 N 章的归档结果（角色状态变化、新伏笔、章末钩子）
@@ -100,11 +103,23 @@ for chapter in range(start, end):
 
 ### 查看进度
 
-读取 `memory/plot/progress.md`，向用户汇报：
+读取自己 workspace 下的 `memory/plot/progress.md`，向用户汇报：
 - 当前写作状态（最新章节、总字数）
 - 质量趋势（最近章节的六维评分变化）
-- 风险提醒（伏笔超期、连续低分等）
 - 进行中任务（如有中断的流水线）
+
+如需查询角色状态、伏笔、章节摘要等详细信息，**必须 spawn memory-keeper 查询**，不要自己用 read 去读 `memory/characters/`、`memory/plot/chapter-log.md` 等文件——这些文件存储在 memory-keeper 的 workspace 下，你的 read 工具访问不到。
+
+### ⚠ 数据检索规则
+
+**你的 `read` 工具只能读取自己 workspace 下的文件**（`novel/`、`memory/plot/progress.md`）。以下数据存储在 memory-keeper 的 workspace 中，你无法直接读取：
+- 角色档案（`memory/characters/`）
+- 大纲和章节摘要（`memory/plot/`）
+- 伏笔追踪（`memory/plot/foreshadowing.md`）
+- 世界设定（`memory/world/`）
+- 文风和词汇表（`memory/style/`）
+
+**需要这些信息时，spawn memory-keeper 来查询，不要自己用 read 或 memory_search 去找。**
 
 ## 文件约定
 

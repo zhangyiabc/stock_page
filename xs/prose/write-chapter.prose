@@ -114,7 +114,7 @@ draft = session: writer
 # 注意：传给 editor 的上下文已精简，只包含审校所需的信息
 review = session: editor
   prompt: |
-    审校第{chapter_number}章。
+    审校第{chapter_number}章。正文和大纲已通过 context 传入，直接从 context 中读取，不要尝试从文件系统中查找。
     
     检查项（按优先级排列）：
     1. **AI 味检测**：
@@ -164,7 +164,7 @@ rewrite = session: writer
 final_review = session: editor
   condition: review contains "VERDICT: FAIL"
   prompt: |
-    这是第{chapter_number}章的修订版（经过一轮修改后的版本）。请再次审校。
+    这是第{chapter_number}章的修订版（经过一轮修改后的版本）。修订版正文已通过 context 传入，直接从 context 中读取，不要尝试从文件系统中查找。
     
     重点检查：
     1. 上一轮提出的 🔴 严重问题是否全部修复
@@ -236,11 +236,14 @@ approval = session: coordinator
 session: memory-keeper
   condition: human_intervention not contains "skip_archive"
   prompt: |
-    第{chapter_number}章已完成审校。请执行归档：
+    第{chapter_number}章已完成审校。请根据 context 中传入的正文和审校报告执行归档。
+    
+    ⚠ 重要：正文和审校报告已通过 context 传入，直接从 context 中读取，不要尝试从文件系统中查找正文文件。正文文件的保存由 coordinator 负责，不是你的职责。
     
     先根据 chapter_number 确定当前所属卷号（查询 chapter-log.md 或 master-outline.md）。
     
-    1. 提取500字章节摘要，追加到当前卷分片文件 memory/plot/chapters/vol{当前卷号}-chapters.md
+    归档操作（全部在你自己的 memory/ 目录下执行）：
+    1. 从 context 中的正文提取500字章节摘要，追加到 memory/plot/chapters/vol{当前卷号}-chapters.md
     2. 更新 chapter-log.md 索引统计
     3. 更新所有涉及角色的状态文件（memory/characters/）
     4. 在 foreshadowing.md 活跃伏笔表中登记新伏笔，同时写入 memory/plot/foreshadowing/vol{当前卷号}-planted.md
@@ -249,6 +252,7 @@ session: memory-keeper
     7. 更新 memory/style/vocabulary.md 中本章出现的新术语
     8. 记录本章的章末钩子内容（供下一章开头承接）
     
+    ⚠ 不要将正文内容保存到你的 memory/ 目录下。正文由 coordinator 写入 novel/ 目录。
     ⚠ 归档完成后只返回更新摘要，控制在 500 字以内。列出更新了哪些文件即可，不要回显文件内容。
   context: { human_fix or rewrite or draft, human_fix or final_review or review }
 

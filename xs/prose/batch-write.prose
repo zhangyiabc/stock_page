@@ -1,200 +1,51 @@
 # 批量写作流水线（连续写多章）
 # 用法: /prose run batch-write.prose
-# ⚠ 核心原则：逐章串行。每章走完 Step 1-5 全流程后才开始下一章。
-# 禁止先统一规划所有章节大纲再统一写正文。
+#
+# ⚠ 核心设计：逐章调用 write-chapter.prose，每章都是独立的 prose 执行。
+# 这样每章的子 agent 都在全新 session 中运行，避免 coordinator 上下文累积溢出。
+# 章与章之间的连续性通过 memory-keeper 的持久化文件保证（角色状态、章节摘要、伏笔、钩子等）。
 
 input start_chapter: "起始章节号"
 input end_chapter: "结束章节号"
 input target_words_per_chapter: "每章目标字数（默认3500）"
 input require_approval_chapters: "需要人工确认的章节号列表（逗号分隔，如 1,2,3,30；留空则全自动）"
 
-agent memory-keeper:
-  model: minimax/MiniMax-M2.5
-  prompt: "你是小说数据库管理员。精确查询和返回角色状态、世界设定、伏笔、章节摘要。输出结构化数据。"
+# 由 coordinator 逐章驱动，每章调用独立的 write-chapter.prose
+session: coordinator
+  prompt: |
+    请执行批量写作任务：从第{start_chapter}章写到第{end_chapter}章。
+    每章目标字数：{target_words_per_chapter}
+    需要人工确认的章节：{require_approval_chapters}
 
-agent planner:
-  model: qwen/qwen3.5-plus
-  prompt: "你是小说策划大师。精通网文爽点设计、节奏控制、钩子设计。输出可执行的详细大纲，每章必须有明确的爽点设计和章末钩子。"
+    **执行规则：**
 
-agent writer:
-  model: openrouter/moonshotai/kimi-k2.5
-  prompt: "你是网文写手。可读性优先，擅长制造情绪起伏。严格执行大纲中的爽点和钩子设计。写完后对照禁用词汇表自检，确认零命中后再提交。"
+    1. **逐章串行调用 write-chapter.prose**：
+       对每一章，使用 `/prose run write-chapter.prose` 执行完整的单章流水线。
+       传入参数：
+       - chapter_number = 当前章节号
+       - target_words = {target_words_per_chapter}
+       - require_approval = 如果当前章节号在 [{require_approval_chapters}] 列表中则为 "true"，否则为 "false"
 
-agent editor:
-  model: zai/glm-5
-  prompt: "你是资深网文编辑。审校优先级：AI味检测 > 网文质量（爽点/钩子/节奏/情绪）> 设定一致性 > 文笔润色。输出六维评分表。在报告开头用 VERDICT: PASS 或 VERDICT: FAIL 标注是否合格。"
+    2. **严格串行，不可并行**：
+       第 N 章的 write-chapter.prose 必须完全执行完毕（包括归档）后，才能开始第 N+1 章。
+       因为第 N+1 章的上下文依赖第 N 章归档后更新的角色状态、伏笔和章末钩子。
 
-# 按章节顺序循环执行完整流水线
-loop chapter_number from {start_chapter} to {end_chapter}:
+    3. **每章完成后更新进度**：
+       每完成一章后，在 memory/plot/progress.md 中更新：
+       - 已完成章节号
+       - 六维评分记录
+       - 下一章编号
+       如果某章被用户跳过，也记录跳过状态。
 
-  # Step 1: 并行收集上下文 + 初步大纲
-  parallel:
-    context_data = session: memory-keeper
-      prompt: |
-        为第{chapter_number}章写作准备上下文。请返回：
-        1. 本章涉及的主要角色当前状态（"当前状态"和"性格特征"段落）
-        2. 相关世界设定要点（只读与本章场景相关的设定）
-        3. 最近3-5章的摘要（从当前卷分片文件读取）
-        4. 当前活跃的伏笔列表（特别标出紧迫度高的）
-        5. 总大纲中对本章的规划
-        6. 上一章的章末钩子内容
-        7. 当前文风指南要点（从 memory/style/style-guide.md 读取基础风格和禁用词表）
-        8. 本章涉及的专有名词（从 memory/style/vocabulary.md 读取相关条目）
-        
-        ⚠ 上下文包总量控制在1万字以内，精炼要点，不要复制原文大段落。
+    4. **异常处理**：
+       - 如果某章的 write-chapter.prose 执行失败或中断，记录断点到 progress.md，向用户报告错误并等待指示
+       - 不要跳过失败的章节自动继续下一章
 
-    outline_draft = session: planner
-      prompt: |
-        为第{chapter_number}章创建初步大纲框架。
-        先基于总大纲中你已知的信息，产出初步的：
-        1. 章节标题方向
-        2. 预期的场景结构（2-3个核心场景）
-        3. 爽点类型预判
-        4. 章末钩子方向
-        
-        ⚠ 初步框架控制在 1500 字以内，只输出框架要点。
+    5. **完成后汇报**：
+       全部章节完成后，向用户汇报：
+       - 完成的章节范围
+       - 每章的六维评分概览
+       - 被跳过或需要修订的章节（如有）
+       - 总字数统计
 
-  # Step 2: 细化大纲
-  outline = session: planner
-    prompt: |
-      基于你刚才的初步框架，结合以下完整上下文，产出第{chapter_number}章的最终详细大纲。
-      
-      请产出：
-      1. 章节标题
-      2. **本章出场角色表**（必填）：
-         对每个出场角色列出：角色名、类型、本章功能、核心欲望、关键特点、与主角关系张力、对话风格。
-         新出场角色额外说明：出场目的、首次亮相记忆点、后续变化方向。
-      3. 章节结构（3-5个场景，每个场景含地点/人物及行为动机/事件/情绪基调/目的）
-      4. 每个场景的大致字数分配
-      5. **爽点设计**（必填）
-      6. 本章需要埋设/回收的伏笔
-      7. **章末钩子设计**（必填，不允许"平着结束"）
-      8. 本章承接上一章钩子的开场方式
-      9. 本章给读者的核心情绪
-      10. **信息控制**：本章释放什么信息、读者会形成什么推测、是否需要误导
-      
-      ⚠ 大纲控制在 3000 字以内，聚焦场景、爽点和钩子，不要写散文式描述。
-    context: { outline_draft, context_data }
-
-  # Step 3: 写正文
-  draft = session: writer
-    prompt: |
-      按照以下大纲撰写第{chapter_number}章完整正文。
-      目标字数：{target_words_per_chapter}
-      
-      要求：
-      - 严格执行大纲的爽点设计
-      - 开头承接上一章的钩子
-      - 章末必须实现大纲设计的钩子
-      - 角色行为和对话必须符合角色设定
-      - 不得违反世界观设定
-      - 使用上下文中的专有名词标准写法
-      - 可读性优先
-      - 写完后执行自检（禁用词/限用词/句式模式/钩子/推进感）
-    context: { outline, context_data }
-
-  # Step 4: 审校（传给 editor 的上下文只含正文和大纲，不含全量世界观）
-  review = session: editor
-    prompt: |
-      审校第{chapter_number}章。
-      
-      检查项（按优先级）：
-      1. AI 味检测（禁用词/限用词/句式模式/对话自然度）
-      2. 网文质量（爽点执行/章末钩子/节奏/情绪价值）
-      3. 人物性格一致性
-      4. 逻辑漏洞和设定冲突
-      5. 时间线和空间逻辑
-      6. 伏笔处理
-      7. 专有名词标准写法
-      
-      **输出格式：**
-      - 第一行写 `VERDICT: PASS` 或 `VERDICT: FAIL`
-      - ⚠ 一致性校验：标了 🔴 就必须 FAIL，给了 PASS 就不能有 🔴
-      - 输出六维评分表（每项1-5星）
-      - FAIL 时：输出具体修改要求清单
-      - PASS 时：🟡/🟢 建议仅供参考，不会触发改写
-      - 列出本章新埋设和已回收的伏笔
-      - ⚠ 审校报告控制在 1500 字以内，PASS 时不要附带正文全文
-    context: { draft, outline }
-
-  # Step 4.1: 不合格时自动重写
-  rewrite = session: writer
-    condition: review contains "VERDICT: FAIL"
-    prompt: |
-      第{chapter_number}章初稿未通过审校，请逐条修复后重新提交完整正文。
-      保持大纲骨架不变，只改有问题的部分。修复后重新自检。
-    context: { review, outline }
-
-  # Step 4.2: 重写后再审
-  final_review = session: editor
-    condition: review contains "VERDICT: FAIL"
-    prompt: |
-      审校第{chapter_number}章修订版。重点检查上轮 🔴 问题是否修复、是否引入新问题。
-      第一行写 `VERDICT: PASS` 或 `VERDICT: FAIL`。
-      输出六维评分表。
-      ⚠ 报告控制在 1500 字以内。
-    context: { rewrite, outline }
-
-  # Step 4.3: 复审仍 FAIL 时，强制通知人工介入
-  human_intervention = session: coordinator
-    condition: final_review contains "VERDICT: FAIL"
-    prompt: |
-      第{chapter_number}章经过自动重写后仍未通过复审，需要人工介入。
-      
-      请向用户展示：
-      1. 复审报告中的六维评分表
-      2. 仍未解决的 🔴 严重问题列表
-      3. 正文摘要（前200字 + 后200字）
-      4. 初审和复审的评分对比
-      
-      请用户判断后选择（回复对应数字）：
-      1. 接受现状 → 以当前版本继续归档
-      2. 提供修改意见 → 请一并给出具体修改要求，writer 会据此再修一版后归档
-      3. 跳过本章 → 标记为待修订，跳过归档直接进入下一章
-      
-      等待用户回复后再继续。如果用户选择 2 并给出修改意见，将意见记录到 human_feedback 中。
-      如果用户选择 3，将 skip_archive 设为 true。
-    context: { final_review, review, rewrite }
-
-  # Step 4.3.1: 用户提供修改意见后，writer 执行人工反馈修改
-  human_fix = session: writer
-    condition: human_intervention contains "human_feedback"
-    prompt: |
-      第{chapter_number}章需要根据以下人工反馈进行修改：
-      
-      请逐条对照修改要求修复，保持大纲骨架不变。
-      修复后重新执行自检（禁用词/限用词/句式模式）。
-      输出完整的修改后正文。
-    context: { human_intervention, rewrite }
-
-  # Step 4.4: 人工审核卡点（仅在指定章节触发）
-  # 使用精确列表匹配避免子串误匹配（如 "3" 不会匹配到 "30"）
-  approval = session: coordinator
-    condition: chapter_number in require_approval_chapters
-    prompt: |
-      第{chapter_number}章已完成写作和审校，需要用户确认。
-      展示六维评分表、正文摘要（前200字+后200字）、章末钩子、🟡 问题清单。
-      等待用户确认后再继续归档。
-    context: { human_fix or final_review or review }
-
-  # Step 5: 归档（用户选择"跳过"时不执行）
-  session: memory-keeper
-    condition: human_intervention not contains "skip_archive"
-    prompt: |
-      第{chapter_number}章已完成审校。请执行归档：
-      1. 提取500字章节摘要，追加到当前卷分片文件
-      2. 更新 chapter-log.md 索引统计
-      3. 更新所有涉及角色的状态文件
-      4. 登记新伏笔到活跃表和卷分片
-      5. 已回收伏笔从活跃表移到归档
-      6. 更新当前卷时间线分片
-      7. 更新 vocabulary.md 中本章出现的新术语
-      8. 记录本章的章末钩子内容
-      
-      ⚠ 归档完成后只返回更新摘要，控制在 500 字以内。列出更新了哪些文件即可，不要回显文件内容。
-    context: { human_fix or rewrite or draft, human_fix or final_review or review }
-
-  session "第{chapter_number}章完成。"
-    context: { human_fix or final_review or review }
-
-session "批量写作完成。第{start_chapter}章到第{end_chapter}章全部写作、审校、归档完毕。"
+    现在开始，从第{start_chapter}章开始执行。

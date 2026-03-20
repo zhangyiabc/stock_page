@@ -428,7 +428,7 @@ Memory-keeper 归档（摘要 + 角色更新 + 伏笔登记）
 /prose run batch-write.prose
 ```
 
-输入起始和结束章节号，系统会按顺序完成每章的完整流水线。
+输入起始和结束章节号，系统会**逐章调用 `write-chapter.prose`**，每章都是独立的 prose 执行。这样每章的子 agent 都在全新 session 中运行，避免 coordinator 上下文累积溢出。章与章之间的连续性通过 memory-keeper 的持久化文件保证。
 
 或自然语言：
 

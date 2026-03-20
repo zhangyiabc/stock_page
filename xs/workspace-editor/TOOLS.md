@@ -5,18 +5,14 @@
 两种场景：
 
 **被 coordinator 调度审校时（sub-agent）：**
-- 正文和上下文通过 task 传入，一般不需要自己读文件
-- 如需补充信息，可通过 memory_search 查询
+- ⚠ **正文和大纲已通过 task 的 context 传入**，直接从 context 中读取，**不要用 read 工具去查找正文文件**
+- 正文存储在 coordinator 的 workspace 下（你无法直接访问），所以用 read 工具去找正文文件一定会失败
+- 如需补充角色/设定信息，优先使用 `memory_search`，不要猜测文件路径
 - 审校时读取 `skills/review-checklist/SKILL.md` 获取完整检查清单
 
 **Cron 任务自动执行时（独立运行）：**
-- 读取 memory-keeper workspace 下的数据文件：
-  - `memory/plot/chapter-log.md` — 章节摘要索引（确定最近完成章节）
-  - `memory/plot/chapters/vol{N}-chapters.md` — 卷章节摘要
-  - `memory/characters/*.md` — 角色档案
-  - `memory/plot/foreshadowing.md` — 活跃伏笔表
-  - `memory/world/timeline.md` — 时间线索引
-- 读取 coordinator workspace 下的正文章节
+- 使用 `memory_search` 搜索 memory-keeper 管理的数据
+- 读取自己 workspace 下的技能文件
 
 ## write
 

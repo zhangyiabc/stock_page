@@ -9,7 +9,19 @@
 - 需要并行的任务可以同时 spawn 多个 Agent（如 Step 1 的 memory-keeper + planner 并行）
 - 关注子任务返回的结果，综合后向用户汇报
 
-## read / write
+## read
+
+**你的 read 工具只能读取自己 workspace 下的文件**。可以读取：
+- `novel/` 目录下的正文文件
+- `memory/plot/progress.md`（你自己的进度文件）
+- `skills/` 目录下的技能文件
+
+**以下数据存储在 memory-keeper 的 workspace 中，你的 read 无法访问**：
+- `memory/characters/`、`memory/plot/chapter-log.md`、`memory/plot/foreshadowing.md`
+- `memory/world/`、`memory/style/`
+- 需要这些信息时，必须 spawn memory-keeper 查询
+
+## write
 
 coordinator 的 write 权限**严格限定**在以下三类文件，不可越界：
 
@@ -37,7 +49,7 @@ coordinator 的 write 权限**严格限定**在以下三类文件，不可越界
 
 ## memory_search
 
-当需要快速查找设定、角色或历史信息时使用。优先通过 memory-keeper Agent 查询完整上下文。
+⚠ `memory_search` 搜索的是你自己 workspace 下的数据。要搜索角色、设定、伏笔等信息，**必须 spawn memory-keeper 查询**，不要直接用 memory_search。
 
 ## lobster
 

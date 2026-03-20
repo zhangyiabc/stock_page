@@ -21,6 +21,19 @@ metadata: {"openclaw": {"emoji": "📚", "always": true}}
 
 这样做的原因：避免同一数据在多个 workspace 下出现不同版本（数据分裂），保证 memory-keeper 的数据始终是唯一权威源。
 
+### ⚠ 跨 Workspace 文件访问限制
+
+**每个 Agent 的 `read`/`write` 工具只能操作自己 workspace 下的文件，无法直接访问其他 Agent 的 workspace。**
+
+| 场景 | 正确做法 | 错误做法 |
+|---|---|---|
+| editor 需要正文 | 从 task context 中读取（prose 流水线已传入） | 用 read 去找 `novel/` 目录（那是 coordinator 的） |
+| memory-keeper 归档需要正文 | 从 task context 中读取（prose 流水线已传入） | 用 read 去找正文文件 |
+| coordinator 需要角色/伏笔数据 | spawn memory-keeper 查询 | 自己用 read 读 `memory/characters/`（那是 memory-keeper 的） |
+| coordinator 需要检查归档是否成功 | spawn memory-keeper 确认 | 自己用 read 读 `memory/plot/chapter-log.md` |
+
+**数据传递方式：Agent 之间传递数据统一通过 `sessions_spawn` 的 task 参数或 prose 的 context 变量，不通过文件系统中转。**
+
 ## 文件路径约定
 
 以下路径均相对于**对应 Agent 自己的 workspace**：
@@ -100,7 +113,7 @@ workspace-coordinator/novel/
 
 ## 章节正文文件格式
 
-文件名示例：`chapter-001-chushan.md`，文件内容格式如下：
+文件名示例：`chapter-001-出山.md`，文件内容格式如下：
 
 ```markdown
 # 第1章 出山
@@ -181,7 +194,7 @@ workspace-coordinator/novel/
 - 详细的规则、清单、格式模板等不应放在 prose prompt 中（已在 workspace 配置里）
 - 如果 prose prompt 与 workspace 配置冲突，以 workspace 配置为准
 
-**⚠ Prose 流水线是强制执行路径。** 写章节时 coordinator 必须通过对应的 prose 流水线执行，不得自行编排步骤或改变执行顺序。批量写作时必须逐章串行（每章走完完整流水线后才开始下一章），禁止先统一规划再统一写作。
+**⚠ Prose 流水线是强制执行路径。** 写章节时 coordinator 必须通过对应的 prose 流水线执行，不得自行编排步骤或改变执行顺序。批量写作时通过 `batch-write.prose` 逐章调用 `write-chapter.prose`，每章都是独立的 prose 执行（避免 coordinator session 上下文累积溢出），章间连续性通过 memory-keeper 持久化文件保证。禁止先统一规划再统一写作。
 
 ## 断点恢复机制
 
